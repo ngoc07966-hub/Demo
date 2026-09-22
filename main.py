@@ -226,7 +226,10 @@ def gui_supabase(loai, muc_do, vi_tri):
 
 @app.get("/")
 def trang_chu():
-    return FileResponse(GOC / "static" / "index.html")
+    # no-cache: trình duyệt phải hỏi lại máy chủ mỗi lần. Thiếu header này Chrome giữ
+    # bản cũ trong cache, sửa giao diện xong tải lại trang vẫn thấy bản cũ.
+    return FileResponse(GOC / "static" / "index.html",
+                        headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/api/kich-ban")
@@ -236,6 +239,8 @@ def kich_ban():
         "diem_di": KB["diem_di"], "diem_den": KB["diem_den"],
         "hanh_trinh_xe_camera": HANH_TRINH,
         "hanh_lang_m": KB["hanh_lang_m"], "muc_do_doi_tuyen": KB["muc_do_doi_tuyen"],
+        # Nua chieu dai khuc tuyen to do quanh moi su co (met)
+        "doan_to_do_m": KB.get("doan_to_do_m", 80),
         "lop": KB["lop"],
         # Hai cờ trạng thái để giao diện báo cho người dùng biết đang thiếu gì
         "co_model": model is not None,

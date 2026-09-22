@@ -133,7 +133,7 @@
       <div id="tuyen-gia">⚠ Chưa có khóa ORS — tuyến chỉ là đường thẳng minh họa, chưa né được sự cố.</div>
       <div class="chu-thich nho">
         <span><i style="background:var(--lam)"></i>Tuyến an toàn</span>
-        <span><i style="background:var(--do)"></i>Tuyến có sự cố</span>
+        <span><i style="background:var(--do)"></i>Khúc có sự cố</span>
         <span><i style="background:var(--xanh)"></i>Tuyến né</span>
         <span><i style="background:#6b7280"></i>Hành trình xe camera</span>
         <span><i style="background:#7c3aed"></i>Vị trí ảnh chụp</span>
@@ -196,6 +196,22 @@ function viTriTrenTuyen(p, tuyen) {
   return { d, docTuyen: tuyen.tichLuy[iGan] };
 }
 
+// Cắt ra các khúc tuyến quanh mỗi sự cố, để tô đỏ đúng chỗ thay vì đỏ cả tuyến.
+// Hai sự cố gần nhau thì hai khúc chồng lên nhau — gộp lại thành một vệt liền.
+function khucNguyHiem(tuyen, dsSuCo, banKinh) {
+  const gop = [];
+  for (const [d, c] of dsSuCo.map((s) => [s.doc_tuyen - banKinh, s.doc_tuyen + banKinh])
+                             .sort((a, b) => a[0] - b[0])) {
+    const cuoi = gop[gop.length - 1];
+    if (cuoi && d <= cuoi[1]) cuoi[1] = Math.max(cuoi[1], c);
+    else gop.push([d, c]);
+  }
+  return gop
+    .map(([d, c]) => tuyen.min.filter((_, i) => tuyen.tichLuy[i] >= d && tuyen.tichLuy[i] <= c))
+    .filter((toaDo) => toaDo.length >= 2)
+    .map(duong);
+}
+
 // ─────────── GeoJSON và định dạng ───────────
 const fc = (features) => ({ type: 'FeatureCollection', features });
 const diem = (toaDo, props = {}) => ({ type: 'Feature', geometry: { type: 'Point', coordinates: toaDo }, properties: props });
@@ -222,7 +238,7 @@ async function khoiDong() {
   map.addControl(new maplibregl.NavigationControl(), 'bottom-right');
 
   map.on('load', () => {
-    for (const id of ['hanh-trinh', 'tuyen-cu', 'tuyen', 'su-co', 'xe-camera']) {
+    for (const id of ['hanh-trinh', 'tuyen-cu', 'tuyen', 'tuyen-do', 'su-co', 'xe-camera']) {
       map.addSource(id, { type: 'geojson', data: fc([]) });
     }
     // Thứ tự thêm = thứ tự vẽ từ dưới lên
@@ -233,6 +249,10 @@ async function khoiDong() {
     map.addLayer({ id: 'lop-tuyen', type: 'line', source: 'tuyen',
       layout: { 'line-join': 'round', 'line-cap': 'round' },
       paint: { 'line-color': MAU.binhThuong, 'line-width': 6 } });
+    // Chỉ những khúc có sự cố mới đỏ — vẽ đè lên tuyến, nên phải thêm sau 'lop-tuyen'
+    map.addLayer({ id: 'lop-tuyen-do', type: 'line', source: 'tuyen-do',
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: { 'line-color': MAU.nguyHiem, 'line-width': 9 } });
     map.addLayer({ id: 'lop-su-co', type: 'circle', source: 'su-co', paint: {
       'circle-color': ['match', ['get', 'loai'],
         ...Object.entries(kb.lop).flatMap(([loai, v]) => [loai, v.mau]), '#888888'],
@@ -305,6 +325,7 @@ async function goiTuyen(vungNe = []) {
 
 function veTuyen() {
   tt.map.getSource('tuyen').setData(fc([duong(tt.tuyen.toa_do)]));
+  tt.map.getSource('tuyen-do').setData(fc([]));   // khúc đỏ của tuyến cũ không còn đúng nữa
   $('thong-tin-tuyen').textContent =
     `${tt.daDoiTuyen ? 'Tuyến né' : 'Tuyến hiện tại'}: ${km(tt.tuyen.quang_duong_m)}, khoảng ${Math.max(1, Math.round(tt.tuyen.thoi_gian_s / 60))} phút`;
   $('tuyen-gia').style.display = tt.tuyen.la_tuyen_gia ? 'block' : 'none';
@@ -345,7 +366,7 @@ async function doiTuyen() {
   }
 }
 
-// ─────────── Cảnh báo: tô đỏ tuyến khi có sự cố trên tuyến ───────────
+// ─────────── Cảnh báo: tô đỏ những khúc tuyến có sự cố ───────────
 function capNhatCanhBao() {
   for (const s of tt.suCo) {
     if (tt.tuyen) {
@@ -363,9 +384,10 @@ function capNhatCanhBao() {
   const nguyHiem = tt.suCo.filter((s) => s.tren_tuyen && s.muc_do >= 2)
                           .sort((a, b) => a.doc_tuyen - b.doc_tuyen);
   if (map.getLayer('lop-tuyen')) {
-    map.setPaintProperty('lop-tuyen', 'line-color',
-      nguyHiem.length ? MAU.nguyHiem : (tt.daDoiTuyen ? MAU.anToan : MAU.binhThuong));
+    map.setPaintProperty('lop-tuyen', 'line-color', tt.daDoiTuyen ? MAU.anToan : MAU.binhThuong);
   }
+  map.getSource('tuyen-do')?.setData(fc(
+    tt.tuyen ? khucNguyHiem(tt.tuyen, nguyHiem, tt.kb.doan_to_do_m) : []));
 
   const hop = $('canh-bao');
   hop.replaceChildren();
@@ -400,11 +422,29 @@ function capNhatCanhBao() {
   docCanhBaoMoi(nguyHiem);
 }
 
+// Chọn sẵn giọng tiếng Việt. Chỉ đặt u.lang là KHÔNG đủ — trình duyệt vẫn có thể
+// lấy giọng mặc định (tiếng Anh) đọc tiếng Việt, nghe sai hoàn toàn.
+let giongVi = null;
+function chonGiong() {
+  const ds = speechSynthesis.getVoices()
+    .filter((g) => g.lang.replace('_', '-').toLowerCase().startsWith('vi'));
+  // Ưu tiên giọng cài trong máy: hôm trình diễn mất mạng vẫn đọc được
+  giongVi = ds.find((g) => g.localService) ?? ds[0] ?? null;
+  console.log(giongVi
+    ? `[Giọng] Đang dùng: ${giongVi.name} (${giongVi.lang})${giongVi.localService ? ' — trong máy' : ' — qua mạng'}`
+    : '[Giọng] ⚠ Không có giọng tiếng Việt. Xem mục "Giọng đọc" trong README.md');
+}
+chonGiong();
+// Chrome nạp danh sách giọng chậm: lần gọi đầu thường rỗng, phải đợi sự kiện này
+speechSynthesis.addEventListener('voiceschanged', chonGiong);
+
 function noi(cau) {
   if (!$('doc-canh-bao').checked || !('speechSynthesis' in window)) return;
   speechSynthesis.cancel();
   const u = new SpeechSynthesisUtterance(cau);
   u.lang = 'vi-VN';
+  if (giongVi) u.voice = giongVi;
+  u.rate = 0.95;                      // chậm lại chút cho rõ khi trình chiếu
   speechSynthesis.speak(u);
 }
 
