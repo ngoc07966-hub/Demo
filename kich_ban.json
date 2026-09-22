@@ -1,0 +1,32 @@
+{
+  "model": "best.pt",
+  "nguong_tin_cay": 0.5,
+  "buoc_khung": 5,
+  "so_khung_xac_nhan": 2,
+  "ban_kinh_gop_m": 25,
+  "hanh_lang_m": 30,
+  "ban_kinh_ne_m": 40,
+  "muc_do_doi_tuyen": 3,
+  "rong_anh_gui": 720,
+  "phat_theo_thoi_gian_thuc": true,
+  "cho_phep_tuyen_gia": true,
+
+  "tam_ban_do": [105.7790, 10.0325],
+  "zoom": 14,
+
+  "lop": {
+    "pothole": { "ten": "Ổ gà",      "muc_do": 2, "mau": "#F59E0B" },
+    "flood":   { "ten": "Ngập nước", "muc_do": 3, "mau": "#06B6D4" }
+  },
+
+  "xe_camera": {
+    "tu":  [105.7893, 10.0349],
+    "den": [105.7690, 10.0298],
+    "duong": null
+  },
+
+  "diem_di":  [105.7893, 10.0349],
+  "diem_den": [105.7690, 10.0298],
+
+  "supabase": { "bat": false, "url": "", "anon_key": "" }
+}

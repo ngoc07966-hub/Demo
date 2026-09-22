@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Demo nhận diện sự cố giao thông</title>
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<style>
+  :root { --nen:#f3f4f6; --the:#fff; --chu:#111827; --phu:#6b7280; --vien:#e5e7eb;
+          --do:#dc2626; --xanh:#16a34a; --lam:#2563eb; --vang:#b45309; }
+  * { box-sizing:border-box; }
+  body { margin:0; height:100vh; display:flex; flex-direction:column;
+         font-family:system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+         background:var(--nen); color:var(--chu); }
+  header { padding:12px 20px; background:var(--the); border-bottom:1px solid var(--vien);
+           display:flex; align-items:center; gap:12px; }
+  header h1 { font-size:18px; margin:0; }
+  #trang-thai { margin-left:auto; font-size:13px; color:var(--phu); }
+
+  /* Dải nhắc việc còn thiếu (model / khóa ORS) — ẩn khi đã đủ */
+  #nhac-viec { display:none; padding:8px 20px; background:#fef3c7; color:var(--vang);
+               font-size:13px; border-bottom:1px solid #fde68a; }
+
+  /* Bố cục 3 phần: trái trên = video, trái dưới = kết quả, phải = bản đồ */
+  .luoi { flex:1; min-height:0; display:grid; gap:16px; padding:16px;
+          grid-template-columns:minmax(380px, 1fr) 1.3fr; grid-template-rows:auto 1fr; }
+  .the { background:var(--the); border:1px solid var(--vien); border-radius:12px; padding:14px;
+         display:flex; flex-direction:column; min-height:0; }
+  .the h2 { font-size:15px; margin:0 0 10px; }
+  #p1 { grid-column:1; grid-row:1; }
+  #p2 { grid-column:1; grid-row:2; }
+  #p3 { grid-column:2; grid-row:1 / 3; position:relative; padding:0; overflow:hidden; }
+
+  .hang { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  button { font:inherit; font-size:14px; padding:7px 14px; border-radius:8px;
+           border:1px solid var(--vien); background:#fff; cursor:pointer; }
+  button.chinh { background:var(--lam); color:#fff; border-color:var(--lam); }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  .man-hinh { margin-top:10px; background:#000; border-radius:8px; aspect-ratio:16/9;
+              display:flex; align-items:center; justify-content:center; overflow:hidden; }
+  .man-hinh video, .man-hinh img { width:100%; height:100%; object-fit:contain; }
+  .goi-y { color:#9ca3af; font-size:13px; }
+  .thanh { height:6px; background:var(--vien); border-radius:3px; margin-top:8px; overflow:hidden; }
+  .thanh > div { height:100%; width:0; background:var(--lam); transition:width .2s; }
+  .nho { font-size:12px; color:var(--phu); }
+
+  .thong-ke { display:grid; grid-auto-columns:1fr; grid-auto-flow:column; gap:8px; margin-bottom:10px; }
+  .thong-ke div { background:var(--nen); border-radius:8px; padding:8px; text-align:center; }
+  .thong-ke b { display:block; font-size:20px; }
+  .thong-ke span { font-size:12px; color:var(--phu); }
+  .bang-cuon { overflow:auto; flex:1; min-height:0; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th, td { text-align:left; padding:6px; border-bottom:1px solid var(--vien); vertical-align:middle; }
+  thead th { position:sticky; top:0; background:var(--the); }
+  tbody tr { cursor:pointer; }
+  tbody tr:hover { background:var(--nen); }
+  td img { width:64px; height:44px; object-fit:cover; border-radius:4px; display:block; }
+  .chip { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; color:#fff; }
+  .nhan { font-size:12px; padding:2px 6px; border-radius:4px; }
+  .nhan.tren { background:#fee2e2; color:var(--do); }
+  .nhan.ngoai { background:var(--nen); color:var(--phu); }
+
+  #ban-do { position:absolute; inset:0; }
+  .noi { position:absolute; left:12px; right:12px; z-index:2; }
+  #hop-tuyen { top:12px; background:#fff; border-radius:10px; padding:10px 12px;
+               box-shadow:0 2px 8px rgba(0,0,0,.15); font-size:13px; }
+  #tuyen-gia { color:var(--vang); font-size:12px; margin-top:4px; display:none; }
+  .chu-thich { display:flex; gap:12px; flex-wrap:wrap; margin-top:6px; }
+  .chu-thich i { display:inline-block; width:14px; height:4px; border-radius:2px;
+                 vertical-align:middle; margin-right:4px; }
+  #canh-bao { bottom:40px; border-radius:10px; padding:12px 14px; color:#fff;
+              box-shadow:0 2px 8px rgba(0,0,0,.2); display:none; font-size:14px; }
+  #canh-bao.do { display:block; background:var(--do); }
+  #canh-bao.xanh { display:block; background:var(--xanh); }
+  #canh-bao button { margin-top:8px; background:#fff; color:var(--chu); border:none; }
+
+  @media (max-width:900px) {
+    body { height:auto; }
+    .luoi { grid-template-columns:1fr; grid-template-rows:auto auto 70vh; }
+    #p1, #p2, #p3 { grid-column:1; grid-row:auto; }
+    .bang-cuon { max-height:50vh; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Hệ thống nhận diện sự cố và cảnh báo tuyến đường</h1>
+  <span id="trang-thai">Đang khởi động…</span>
+</header>
+<div id="nhac-viec"></div>
+
+<main class="luoi">
+  <!-- PHẦN 1: VIDEO NHẬN DIỆN -->
+  <section class="the" id="p1">
+    <h2>1. Video nhận diện <span id="ban-model" class="nho" style="font-weight:400"></span></h2>
+    <div class="hang">
+      <input type="file" id="chon-video" accept="video/*">
+      <button class="chinh" id="nut-bat-dau" disabled>Bắt đầu nhận diện</button>
+      <button id="nut-dung" disabled>Dừng</button>
+    </div>
+    <div class="hang" style="margin-top:8px">
+      <span class="nho">Hoặc nhận diện ảnh chụp:</span>
+      <input type="file" id="chon-anh" accept="image/*" multiple>
+      <span class="nho">đặt tại ghim tím trên bản đồ — kéo ghim để đổi chỗ</span>
+    </div>
+    <div class="man-hinh" id="man-hinh"><span class="goi-y">Chọn một video đường phố, hoặc một ảnh chụp, để bắt đầu</span></div>
+    <div class="thanh"><div id="tien-do"></div></div>
+    <div class="hang nho" style="margin-top:6px; justify-content:space-between">
+      <span id="thoi-gian">00:00</span>
+      <span id="dang-thay"></span>
+    </div>
+  </section>
+
+  <!-- PHẦN 2: KẾT QUẢ NHẬN DIỆN -->
+  <section class="the" id="p2">
+    <h2>2. Kết quả nhận diện</h2>
+    <div class="thong-ke" id="thong-ke"></div>
+    <div class="bang-cuon">
+      <table>
+        <thead><tr><th>Ảnh</th><th>Loại</th><th>Tin cậy</th><th>Thời điểm</th><th>Tuyến</th></tr></thead>
+        <tbody id="bang-su-co"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- PHẦN 3: BẢN ĐỒ ĐỊNH TUYẾN -->
+  <section class="the" id="p3">
+    <div id="ban-do"></div>
+    <div class="noi" id="hop-tuyen">
+      <b>3. Bản đồ định tuyến</b> — kéo ghim xanh (điểm đi) và ghim đỏ (điểm đến) để đổi tuyến
+      <div id="thong-tin-tuyen" class="nho"></div>
+      <div id="tuyen-gia">⚠ Chưa có khóa ORS — tuyến chỉ là đường thẳng minh họa, chưa né được sự cố.</div>
+      <div class="chu-thich nho">
+        <span><i style="background:var(--lam)"></i>Tuyến an toàn</span>
+        <span><i style="background:var(--do)"></i>Tuyến có sự cố</span>
+        <span><i style="background:var(--xanh)"></i>Tuyến né</span>
+        <span><i style="background:#6b7280"></i>Hành trình xe camera</span>
+        <span><i style="background:#7c3aed"></i>Vị trí ảnh chụp</span>
+        <label><input type="checkbox" id="doc-canh-bao" checked> Đọc cảnh báo</label>
+      </div>
+    </div>
+    <div class="noi" id="canh-bao"></div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const MAU = { binhThuong: '#2563eb', nguyHiem: '#dc2626', anToan: '#16a34a', ghimAnh: '#7c3aed' };
+
+// Trạng thái chung của trang
+const tt = {
+  kb: null, map: null, ghimDi: null, ghimDen: null, ghimAnh: null,
+  tuyen: null,          // tuyến đang dùng: { toa_do, quang_duong_m, thoi_gian_s, min, tichLuy }
+  daDoiTuyen: false, chenhLech: '',
+  suCo: [], daDoc: new Set(), demAnh: 0,
+  videoId: null, ws: null,
+};
+
+// ─────────── Hình học (tọa độ luôn là [kinh độ, vĩ độ]) ───────────
+function khoangCach(a, b) {
+  const R = 6371000, r = Math.PI / 180;
+  const dLat = (b[1] - a[1]) * r, dLon = (b[0] - a[0]) * r;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(a[1] * r) * Math.cos(b[1] * r) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+// Chèn thêm điểm để hai điểm liên tiếp cách nhau không quá `buoc` mét
+function chiaNho(toaDo, buoc = 10) {
+  const kq = [toaDo[0]];
+  for (let i = 0; i < toaDo.length - 1; i++) {
+    const a = toaDo[i], b = toaDo[i + 1];
+    const n = Math.max(1, Math.ceil(khoangCach(a, b) / buoc));
+    for (let k = 1; k <= n; k++) kq.push([a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n]);
+  }
+  return kq;
+}
+
+function taoTuyen(dl) {
+  const min = chiaNho(dl.toa_do);
+  const tichLuy = [0];
+  for (let i = 1; i < min.length; i++) tichLuy.push(tichLuy[i - 1] + khoangCach(min[i - 1], min[i]));
+  return { ...dl, min, tichLuy };
+}
+
+// Điểm nằm giữa một đường, tính theo quãng đường chứ không theo số điểm
+function diemGiua(toaDo) {
+  const min = chiaNho(toaDo, 20);
+  return min[Math.floor(min.length / 2)];
+}
+
+// → { d: khoảng cách tới tuyến (m), docTuyen: quãng đường từ điểm đi tới đó (m) }
+function viTriTrenTuyen(p, tuyen) {
+  let d = Infinity, iGan = 0;
+  tuyen.min.forEach((q, i) => { const x = khoangCach(p, q); if (x < d) { d = x; iGan = i; } });
+  return { d, docTuyen: tuyen.tichLuy[iGan] };
+}
+
+// ─────────── GeoJSON và định dạng ───────────
+const fc = (features) => ({ type: 'FeatureCollection', features });
+const diem = (toaDo, props = {}) => ({ type: 'Feature', geometry: { type: 'Point', coordinates: toaDo }, properties: props });
+const duong = (toaDo) => ({ type: 'Feature', geometry: { type: 'LineString', coordinates: toaDo }, properties: {} });
+const mmss = (s) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+const km = (m) => (m >= 1000 ? `${(m / 1000).toFixed(1).replace('.', ',')} km` : `${Math.round(m)} m`);
+const tenLop = (loai) => tt.kb.lop[loai]?.ten ?? loai;
+const mauLop = (loai) => tt.kb.lop[loai]?.mau ?? '#888888';
+const bao = (noiDung) => { $('trang-thai').textContent = noiDung; };
+
+// ─────────── PHẦN 3: Bản đồ ───────────
+async function khoiDong() {
+  tt.kb = await (await fetch('/api/kich-ban')).json();
+  const kb = tt.kb;
+  taoOThongKe();
+  nhacViec();
+  hienBanModel();
+
+  const map = tt.map = new maplibregl.Map({
+    container: 'ban-do',
+    style: 'https://tiles.openfreemap.org/styles/liberty',
+    center: kb.tam_ban_do, zoom: kb.zoom,
+  });
+  map.addControl(new maplibregl.NavigationControl(), 'bottom-right');
+
+  map.on('load', () => {
+    for (const id of ['hanh-trinh', 'tuyen-cu', 'tuyen', 'su-co', 'xe-camera']) {
+      map.addSource(id, { type: 'geojson', data: fc([]) });
+    }
+    // Thứ tự thêm = thứ tự vẽ từ dưới lên
+    map.addLayer({ id: 'lop-hanh-trinh', type: 'line', source: 'hanh-trinh',
+      paint: { 'line-color': '#6b7280', 'line-width': 3, 'line-dasharray': [2, 2] } });
+    map.addLayer({ id: 'lop-tuyen-cu', type: 'line', source: 'tuyen-cu',
+      paint: { 'line-color': MAU.nguyHiem, 'line-width': 5, 'line-opacity': 0.4, 'line-dasharray': [1.5, 1.5] } });
+    map.addLayer({ id: 'lop-tuyen', type: 'line', source: 'tuyen',
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: { 'line-color': MAU.binhThuong, 'line-width': 6 } });
+    map.addLayer({ id: 'lop-su-co', type: 'circle', source: 'su-co', paint: {
+      'circle-color': ['match', ['get', 'loai'],
+        ...Object.entries(kb.lop).flatMap(([loai, v]) => [loai, v.mau]), '#888888'],
+      'circle-radius': ['match', ['get', 'muc_do'], 3, 11, 2, 8, 6],
+      'circle-opacity': ['case', ['==', ['get', 'tren_tuyen'], true], 1, 0.4],
+      'circle-stroke-color': '#ffffff', 'circle-stroke-width': 2 } });
+    map.addLayer({ id: 'lop-xe-camera', type: 'circle', source: 'xe-camera', paint: {
+      'circle-color': '#111827', 'circle-radius': 7, 'circle-stroke-color': '#ffffff', 'circle-stroke-width': 2 } });
+
+    map.getSource('hanh-trinh').setData(fc([duong(kb.hanh_trinh_xe_camera)]));
+    tt.ghimDi = taoGhim(kb.diem_di, MAU.binhThuong);
+    tt.ghimDen = taoGhim(kb.diem_den, MAU.nguyHiem);
+
+    // Ghim tím: nơi sẽ đặt sự cố tìm thấy trong ảnh chụp. Mặc định giữa hành trình
+    // xe camera để rơi đúng vào tuyến, người dùng kéo đi chỗ khác được.
+    tt.ghimAnh = new maplibregl.Marker({ color: MAU.ghimAnh, draggable: true })
+      .setLngLat(diemGiua(kb.hanh_trinh_xe_camera))
+      .setPopup(new maplibregl.Popup({ offset: 24 }).setText('Vị trí gán cho sự cố tìm thấy trong ảnh chụp'))
+      .addTo(map);
+
+    tinhTuyen();
+  });
+}
+
+// Thông tin bản train, đọc từ model.json — để người xem biết đang chạy model nào
+function hienBanModel() {
+  const m = tt.kb.thong_tin_model;
+  if (!m) return;
+  const phan = [m.phien_ban, ngayVN(m.ngay_train)];
+  if (m.mAP50 != null) phan.push(`mAP50 ${m.mAP50}`);
+  const o = $('ban-model');
+  o.textContent = '· Model ' + phan.filter(Boolean).join(' · ');
+  if (m.dataset) o.title = 'Dataset: ' + m.dataset;
+}
+
+// '2026-09-25' → '25/09/2026'. Định dạng khác thì giữ nguyên.
+function ngayVN(s) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s ?? '');
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : s;
+}
+
+// Nhắc những thứ còn thiếu để demo chạy đủ
+function nhacViec() {
+  const thieu = [];
+  if (tt.kb.che_do_thu) thieu.push('<b>CHẾ ĐỘ THỬ</b> — đang dùng model chung yolo11n.pt, không phải model ổ gà/ngập của nhóm');
+  else if (!tt.kb.co_model) thieu.push('chưa nạp được model — đặt <b>best.pt</b> cạnh main.py (hoặc trong models/) rồi khởi động lại máy chủ');
+  if (!tt.kb.co_khoa_ors) thieu.push('chưa có <b>ORS_API_KEY</b> trong file .env — tuyến đường chỉ là đường thẳng minh họa');
+  if (!thieu.length) return;
+  const o = $('nhac-viec');
+  o.innerHTML = '⚠ ' + thieu.join(' · ');
+  o.style.display = 'block';
+}
+
+function taoGhim(toaDo, mau) {
+  const ghim = new maplibregl.Marker({ color: mau, draggable: true }).setLngLat(toaDo).addTo(tt.map);
+  ghim.on('dragend', () => tinhTuyen());
+  return ghim;
+}
+const toaDoGhim = (ghim) => { const p = ghim.getLngLat(); return [p.lng, p.lat]; };
+
+async function goiTuyen(vungNe = []) {
+  const r = await fetch('/api/tuyen-duong', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ diem_di: toaDoGhim(tt.ghimDi), diem_den: toaDoGhim(tt.ghimDen), vung_ne: vungNe }),
+  });
+  const dl = await r.json();
+  if (!r.ok) throw new Error(dl.detail || `Lỗi ${r.status}`);
+  return taoTuyen(dl);
+}
+
+function veTuyen() {
+  tt.map.getSource('tuyen').setData(fc([duong(tt.tuyen.toa_do)]));
+  $('thong-tin-tuyen').textContent =
+    `${tt.daDoiTuyen ? 'Tuyến né' : 'Tuyến hiện tại'}: ${km(tt.tuyen.quang_duong_m)}, khoảng ${Math.max(1, Math.round(tt.tuyen.thoi_gian_s / 60))} phút`;
+  $('tuyen-gia').style.display = tt.tuyen.la_tuyen_gia ? 'block' : 'none';
+}
+
+async function tinhTuyen() {
+  bao('Đang tính tuyến đường…');
+  try {
+    tt.tuyen = await goiTuyen();
+    tt.daDoiTuyen = false;
+    tt.map.getSource('tuyen-cu').setData(fc([]));
+    veTuyen();
+    capNhatCanhBao();
+    bao('Sẵn sàng');
+  } catch (e) {
+    bao('Không tính được tuyến: ' + e.message);
+  }
+}
+
+// Né TẤT CẢ sự cố nghiêm trọng đã biết trong một lần gọi
+async function doiTuyen() {
+  const vungNe = tt.suCo.filter((s) => s.muc_do >= tt.kb.muc_do_doi_tuyen).slice(0, 20).map((s) => s.vi_tri);
+  bao('Đang tìm tuyến né…');
+  try {
+    const cu = tt.tuyen;
+    const moi = await goiTuyen(vungNe);
+    tt.tuyen = moi;
+    tt.daDoiTuyen = true;
+    const them = moi.quang_duong_m - cu.quang_duong_m;
+    tt.chenhLech = them >= 0 ? `dài thêm ${km(them)}` : `ngắn hơn ${km(-them)}`;
+    tt.map.getSource('tuyen-cu').setData(fc([duong(cu.toa_do)]));
+    veTuyen();
+    capNhatCanhBao();
+    noi(`Đã đổi tuyến, ${tt.chenhLech}`);
+    bao('Đã đổi tuyến');
+  } catch (e) {
+    bao('Không tìm được tuyến né: ' + e.message);
+  }
+}
+
+// ─────────── Cảnh báo: tô đỏ tuyến khi có sự cố trên tuyến ───────────
+function capNhatCanhBao() {
+  for (const s of tt.suCo) {
+    if (tt.tuyen) {
+      const v = viTriTrenTuyen(s.vi_tri, tt.tuyen);
+      s.tren_tuyen = v.d <= tt.kb.hanh_lang_m;
+      s.doc_tuyen = v.docTuyen;
+    } else {
+      s.tren_tuyen = false;
+    }
+  }
+  const map = tt.map;
+  map.getSource('su-co')?.setData(fc(tt.suCo.map((s) =>
+    diem(s.vi_tri, { loai: s.loai, muc_do: s.muc_do, tren_tuyen: s.tren_tuyen }))));
+
+  const nguyHiem = tt.suCo.filter((s) => s.tren_tuyen && s.muc_do >= 2)
+                          .sort((a, b) => a.doc_tuyen - b.doc_tuyen);
+  if (map.getLayer('lop-tuyen')) {
+    map.setPaintProperty('lop-tuyen', 'line-color',
+      nguyHiem.length ? MAU.nguyHiem : (tt.daDoiTuyen ? MAU.anToan : MAU.binhThuong));
+  }
+
+  const hop = $('canh-bao');
+  hop.replaceChildren();
+  hop.className = 'noi';
+  if (nguyHiem.length) {
+    hop.classList.add('do');
+    const tieuDe = document.createElement('b');
+    tieuDe.textContent = `CẢNH BÁO: ${nguyHiem.length} sự cố trên tuyến đường`;
+    hop.append(tieuDe);
+    for (const s of nguyHiem.slice(0, 3)) {
+      const dong = document.createElement('div');
+      dong.textContent = `${tenLop(s.loai)} — cách điểm đi ${km(s.doc_tuyen)}`;
+      hop.append(dong);
+    }
+    if (nguyHiem.some((s) => s.muc_do >= tt.kb.muc_do_doi_tuyen)) {
+      const nut = document.createElement('button');
+      nut.textContent = 'Tìm tuyến né';
+      nut.onclick = doiTuyen;
+      hop.append(nut);
+    } else {
+      const ghiChu = document.createElement('div');
+      ghiChu.textContent = 'Sự cố mức vừa: nên giảm tốc độ, không cần đổi tuyến.';
+      hop.append(ghiChu);
+    }
+  } else if (tt.daDoiTuyen) {
+    hop.classList.add('xanh');
+    hop.textContent = `Đã đổi sang tuyến né: ${km(tt.tuyen.quang_duong_m)} (${tt.chenhLech}). Chưa phát hiện sự cố trên tuyến mới.`;
+  }
+
+  $('tk-tren-tuyen').textContent = tt.suCo.filter((s) => s.tren_tuyen).length;
+  veBang();
+  docCanhBaoMoi(nguyHiem);
+}
+
+function noi(cau) {
+  if (!$('doc-canh-bao').checked || !('speechSynthesis' in window)) return;
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(cau);
+  u.lang = 'vi-VN';
+  speechSynthesis.speak(u);
+}
+
+function docCanhBaoMoi(nguyHiem) {
+  const moi = nguyHiem.filter((s) => !tt.daDoc.has(s.id));
+  if (!moi.length) return;
+  moi.forEach((s) => tt.daDoc.add(s.id));
+  noi(`Cảnh báo. ${tenLop(moi[0].loai)} trên tuyến đường, cách điểm đi ${km(moi[0].doc_tuyen)}`);
+}
+
+// ─────────── PHẦN 2: Kết quả nhận diện ───────────
+
+// Ô thống kê sinh theo `lop` trong kich_ban.json → đổi lớp model vẫn đếm đúng
+function taoOThongKe() {
+  const o = (id, nhan) => {
+    const d = document.createElement('div');
+    const b = document.createElement('b'); b.id = id; b.textContent = '0';
+    const s = document.createElement('span'); s.textContent = nhan;
+    d.append(b, s);
+    return d;
+  };
+  const cac = [o('tk-tong', 'Tổng sự cố')];
+  for (const [loai, v] of Object.entries(tt.kb.lop)) cac.push(o('tk-' + loai, v.ten));
+  cac.push(o('tk-tren-tuyen', 'Trên tuyến'));
+  $('thong-ke').replaceChildren(...cac);
+}
+
+function capNhatThongKe() {
+  $('tk-tong').textContent = tt.suCo.length;
+  for (const loai of Object.keys(tt.kb.lop)) {
+    const o = $('tk-' + loai);
+    if (o) o.textContent = tt.suCo.filter((s) => s.loai === loai).length;
+  }
+}
+
+function veBang() {
+  const hang = tt.suCo.slice().reverse().map((s) => {
+    const tr = document.createElement('tr');
+    const o = () => tr.appendChild(document.createElement('td'));
+
+    const oAnh = o();
+    if (s.anh_cat) { const img = document.createElement('img'); img.src = s.anh_cat; img.alt = tenLop(s.loai); oAnh.append(img); }
+
+    const chip = document.createElement('span');
+    chip.className = 'chip';
+    chip.style.background = mauLop(s.loai);
+    chip.textContent = tenLop(s.loai);
+    o().append(chip);
+
+    o().textContent = `${Math.round(s.tin_cay * 100)}%`;
+
+    const oLuc = o();
+    if (s.nguon === 'anh') {
+      oLuc.textContent = 'Ảnh';
+      oLuc.className = 'nho';
+      oLuc.title = s.ten_tep ?? '';
+    } else {
+      oLuc.textContent = mmss(s.thoi_diem);
+    }
+
+    const nhan = document.createElement('span');
+    nhan.className = 'nhan ' + (s.tren_tuyen ? 'tren' : 'ngoai');
+    nhan.textContent = s.tren_tuyen ? 'Trên tuyến' : 'Ngoài tuyến';
+    o().append(nhan);
+
+    tr.onclick = () => tt.map.flyTo({ center: s.vi_tri, zoom: 17 });
+    return tr;
+  });
+  $('bang-su-co').replaceChildren(...hang);
+}
+
+// ─────────── PHẦN 1: Video nhận diện ───────────
+$('chon-video').addEventListener('change', async (e) => {
+  const tep = e.target.files[0];
+  if (!tep) return;
+  dungNhanDien();
+  tt.videoId = null;
+  const video = document.createElement('video');
+  video.src = URL.createObjectURL(tep);
+  video.controls = true;
+  video.muted = true;
+  $('man-hinh').replaceChildren(video);
+  $('nut-bat-dau').disabled = true;
+  bao('Đang tải video lên…');
+
+  const fd = new FormData();
+  fd.append('tep', tep);
+  try {
+    const r = await fetch('/api/video', { method: 'POST', body: fd });
+    const dl = await r.json();
+    if (!r.ok) throw new Error(dl.detail || `Lỗi ${r.status}`);
+    tt.videoId = dl.video_id;
+    $('nut-bat-dau').disabled = false;
+    bao(`Đã tải lên: ${dl.ten} (${mmss(dl.thoi_luong)}, ${dl.fps} khung/giây)`);
+  } catch (err) {
+    bao('Tải video thất bại: ' + err.message);
+  }
+});
+
+// ─────────── PHẦN 1b: Nhận diện ảnh chụp ───────────
+// Khác video ở hai chỗ: không có tiến độ để nội suy vị trí (lấy theo ghim tím),
+// và mỗi loại trong một ảnh chỉ tính là MỘT sự cố (lấy khung tin cậy cao nhất).
+$('chon-anh').addEventListener('change', async (e) => {
+  const cac = [...e.target.files];
+  e.target.value = '';                       // cho phép chọn lại đúng tệp đó lần sau
+  if (!cac.length) return;
+  dungNhanDien();
+
+  const img = document.createElement('img');
+  img.alt = 'Ảnh đã nhận diện';
+  $('man-hinh').replaceChildren(img);
+
+  let themMoi = 0;
+  for (const [i, tep] of cac.entries()) {
+    bao(`Đang nhận diện ảnh ${i + 1}/${cac.length}: ${tep.name}…`);
+    const fd = new FormData();
+    fd.append('tep', tep);
+    try {
+      const r = await fetch('/api/anh', { method: 'POST', body: fd });
+      const dl = await r.json();
+      if (!r.ok) throw new Error(dl.detail || `Lỗi ${r.status}`);
+
+      img.src = dl.anh;
+      $('dang-thay').textContent = dl.phat_hien.length
+        ? 'Đang thấy: ' + dl.phat_hien.map((p) => `${tenLop(p.loai)} ${Math.round(p.tin_cay * 100)}%`).join(', ')
+        : 'Không thấy sự cố nào trong ảnh này';
+
+      // Gom theo loại, mỗi loại giữ khung tin cậy cao nhất
+      const tot = new Map();
+      for (const p of dl.phat_hien) {
+        if (!tot.has(p.loai) || p.tin_cay > tot.get(p.loai).tin_cay) tot.set(p.loai, p);
+      }
+      for (const p of tot.values()) {
+        tt.suCo.push({
+          id: 'a' + (++tt.demAnh), loai: p.loai, muc_do: tt.kb.lop[p.loai]?.muc_do ?? 1,
+          tin_cay: p.tin_cay, vi_tri: toaDoGhim(tt.ghimAnh),
+          thoi_diem: null, anh_cat: p.anh_cat, nguon: 'anh', ten_tep: dl.ten,
+        });
+        themMoi++;
+      }
+    } catch (err) {
+      bao(`Ảnh ${tep.name}: ${err.message}`);
+      return;
+    }
+  }
+
+  capNhatThongKe();
+  capNhatCanhBao();
+  bao(themMoi
+    ? `Đã nhận diện ${cac.length} ảnh — thêm ${themMoi} sự cố`
+    : `Đã nhận diện ${cac.length} ảnh — không thấy sự cố nào`);
+});
+
+$('nut-bat-dau').onclick = () => batDauNhanDien();
+$('nut-dung').onclick = () => { dungNhanDien(); bao('Đã dừng'); };
+
+function batDauNhanDien() {
+  if (!tt.videoId) return;
+  dungNhanDien();
+  tt.suCo = [];                              // chạy video mới thì xóa cả sự cố từ ảnh chụp
+  tt.daDoc.clear();
+  tt.demAnh = 0;
+  capNhatThongKe();
+  capNhatCanhBao();
+
+  const img = document.createElement('img');
+  img.alt = 'Khung hình đã nhận diện';
+  $('man-hinh').replaceChildren(img);
+  $('nut-bat-dau').disabled = true;
+  $('nut-dung').disabled = false;
+
+  const giaoThuc = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = tt.ws = new WebSocket(`${giaoThuc}://${location.host}/ws/nhan-dien/${tt.videoId}`);
+
+  ws.onmessage = (e) => {
+    const m = JSON.parse(e.data);
+    switch (m.loai_tin) {
+      case 'bat_dau':
+        bao('Đang nhận diện…');
+        break;
+      case 'khung':
+        img.src = m.anh;
+        $('tien-do').style.width = `${m.tien_do * 100}%`;
+        $('thoi-gian').textContent = mmss(m.thoi_diem);
+        $('dang-thay').textContent = m.phat_hien.length
+          ? 'Đang thấy: ' + m.phat_hien.map((p) => `${tenLop(p.loai)} ${Math.round(p.tin_cay * 100)}%`).join(', ')
+          : '';
+        tt.map.getSource('xe-camera')?.setData(fc([diem(m.vi_tri_xe)]));
+        break;
+      case 'su_co':
+        tt.suCo.push(m);
+        capNhatThongKe();
+        capNhatCanhBao();
+        break;
+      case 'ket_thuc':
+        bao(`Hoàn tất: ${m.tong_su_co} sự cố, xử lý trong ${m.thoi_gian_xu_ly} giây`);
+        break;
+      case 'loi':
+        bao('Lỗi: ' + m.noi_dung);
+        break;
+    }
+  };
+  ws.onclose = () => {
+    tt.ws = null;
+    $('nut-dung').disabled = true;
+    $('nut-bat-dau').disabled = !tt.videoId;
+  };
+  ws.onerror = () => bao('Mất kết nối với máy chủ');
+}
+
+function dungNhanDien() {
+  if (tt.ws) { tt.ws.onclose = null; tt.ws.close(); tt.ws = null; }
+  $('nut-dung').disabled = true;
+  $('nut-bat-dau').disabled = !tt.videoId;
+}
+
+khoiDong().catch((e) => bao('Không khởi động được: ' + e.message));
+</script>
+</body>
+</html>

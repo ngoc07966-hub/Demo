@@ -1,0 +1,20 @@
+# Khóa API — KHÔNG BAO GIỜ đưa lên GitHub
+.env
+
+# Môi trường ảo Python
+.venv/
+__pycache__/
+*.pyc
+
+# Video người dùng tải lên khi chạy demo
+uploads/*
+!uploads/.gitkeep
+
+# Model — file nặng, tải riêng từ Google Drive / Colab
+*.pt
+
+# Kết quả chạy thử của Ultralytics
+runs/
+
+# Cau hinh cuc bo cua Claude Code — rieng tung may
+.claude/

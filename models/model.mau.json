@@ -1,0 +1,12 @@
+{
+  "phien_ban": "v1",
+  "ngay_train": "2026-09-25",
+  "nen": "yolo11n.pt",
+  "dataset": "Roboflow: pothole-flood, phiên bản 3, 1.240 ảnh",
+  "epochs": 100,
+  "imgsz": 640,
+  "lop": ["pothole", "flood"],
+  "mAP50": 0.78,
+  "mAP50_95": 0.52,
+  "ghi_chu": "Thêm 200 ảnh ngập chụp ban đêm so với bản trước"
+}

@@ -1,0 +1,7 @@
+ultralytics
+fastapi
+uvicorn[standard]
+python-multipart
+httpx
+python-dotenv
+# supabase          # bỏ dấu # nếu bật gửi sự cố lên Supabase (xem kich_ban.json)
