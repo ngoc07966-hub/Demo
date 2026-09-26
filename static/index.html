@@ -368,6 +368,7 @@ async function goiTuyen(vungNe = []) {
 
 function veTuyen() {
   tt.map.getSource('tuyen').setData(fc([duong(tt.tuyen.toa_do)]));
+  tt.map.getSource('tuyen-do').setData(fc([]));   // khúc đỏ của tuyến cũ không còn đúng nữa
   $('thong-tin-tuyen').textContent =
     `${tt.daDoiTuyen ? 'Tuyến né' : 'Tuyến hiện tại'}: ${km(tt.tuyen.quang_duong_m)}, khoảng ${Math.max(1, Math.round(tt.tuyen.thoi_gian_s / 60))} phút`;
   $('tuyen-gia').style.display = tt.tuyen.la_tuyen_gia ? 'block' : 'none';
@@ -408,7 +409,7 @@ async function doiTuyen() {
   }
 }
 
-// ─────────── Cảnh báo: tô đỏ tuyến khi có sự cố trên tuyến ───────────
+// ─────────── Cảnh báo: tô đỏ những khúc tuyến có sự cố ───────────
 function capNhatCanhBao() {
   for (const s of tt.suCo) {
     if (tt.tuyen) {
@@ -465,11 +466,29 @@ function capNhatCanhBao() {
   docCanhBaoMoi(nguyHiem);
 }
 
+// Chọn sẵn giọng tiếng Việt. Chỉ đặt u.lang là KHÔNG đủ — trình duyệt vẫn có thể
+// lấy giọng mặc định (tiếng Anh) đọc tiếng Việt, nghe sai hoàn toàn.
+let giongVi = null;
+function chonGiong() {
+  const ds = speechSynthesis.getVoices()
+    .filter((g) => g.lang.replace('_', '-').toLowerCase().startsWith('vi'));
+  // Ưu tiên giọng cài trong máy: hôm trình diễn mất mạng vẫn đọc được
+  giongVi = ds.find((g) => g.localService) ?? ds[0] ?? null;
+  console.log(giongVi
+    ? `[Giọng] Đang dùng: ${giongVi.name} (${giongVi.lang})${giongVi.localService ? ' — trong máy' : ' — qua mạng'}`
+    : '[Giọng] ⚠ Không có giọng tiếng Việt. Xem mục "Giọng đọc" trong README.md');
+}
+chonGiong();
+// Chrome nạp danh sách giọng chậm: lần gọi đầu thường rỗng, phải đợi sự kiện này
+speechSynthesis.addEventListener('voiceschanged', chonGiong);
+
 function noi(cau) {
   if (!$('doc-canh-bao').checked || !('speechSynthesis' in window)) return;
   speechSynthesis.cancel();
   const u = new SpeechSynthesisUtterance(cau);
   u.lang = 'vi-VN';
+  if (giongVi) u.voice = giongVi;
+  u.rate = 0.95;                      // chậm lại chút cho rõ khi trình chiếu
   speechSynthesis.speak(u);
 }
 

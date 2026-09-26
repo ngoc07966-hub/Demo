@@ -62,11 +62,11 @@ hình thật**. Nó dùng `yolo11n.pt` (model chung của Ultralytics, tự tả
 
 | Nhận ra | Coi như | Mức độ | Kết quả trên giao diện |
 |---|---|---|---|
-| Ô tô | ổ gà | 2 | Tô đỏ tuyến, cảnh báo "nên giảm tốc độ" |
-| Người | ngập nước | 3 | Tô đỏ tuyến, hiện nút **Tìm tuyến né** |
+| Ô tô | ổ gà | 2 | Tô đỏ khúc có sự cố, cảnh báo "nên giảm tốc độ" |
+| Người | ngập nước | 3 | Tô đỏ khúc có sự cố, hiện nút **Tìm tuyến né** |
 
 Chọn một video đường phố bất kỳ (có xe và người đi bộ) là chạy được trọn luồng: bảng kết quả,
-tô đỏ tuyến, hộp cảnh báo, tìm tuyến né, giọng đọc. Giao diện hiện dải vàng **CHẾ ĐỘ THỬ**
+tô đỏ khúc có sự cố, hộp cảnh báo, tìm tuyến né, giọng đọc. Giao diện hiện dải vàng **CHẾ ĐỘ THỬ**
 để không lỡ tay trình diễn nhầm cấu hình.
 
 Có `best.pt` rồi thì chạy `.\chay.ps1` như bình thường, không phải sửa gì.
@@ -133,7 +133,7 @@ Mọi tham số nằm trong `kich_ban.json`, sửa xong khởi động lại má
 | `xe_camera.tu` / `.den` | Hành trình xe có camera hành trình | Chợ Cần Thơ → ĐH Cần Thơ khu II |
 | `diem_di` / `diem_den` | Vị trí ban đầu của ghim A, B | = hành trình xe camera |
 
-**Để tuyến chuyển đỏ khi demo:** giữ `diem_di`/`diem_den` **bằng đúng**
+**Để khúc tuyến chuyển đỏ khi demo:** giữ `diem_di`/`diem_den` **bằng đúng**
 `xe_camera.tu`/`xe_camera.den`. Sự cố lấy vị trí từ hành trình xe camera, nên hai tuyến
 phải trùng nhau thì sự cố mới rơi vào hành lang 30 m.
 
@@ -150,6 +150,30 @@ point"*. Lấy tọa độ bằng cách nhấp chuột phải trên Google Maps 
 → **đảo lại** thành `[kinh độ, vĩ độ]`.
 
 ---
+
+## 4b. Giọng đọc cảnh báo
+
+Trang dùng **Web Speech API** có sẵn trong trình duyệt — không thư viện, không gọi mạng,
+không tốn phí. Tắt bằng ô **Đọc cảnh báo** dưới bản đồ.
+
+**Cần cài giọng tiếng Việt cho Windows**, nếu không trình duyệt sẽ lấy giọng tiếng Anh
+đọc tiếng Việt, nghe sai hoàn toàn:
+
+Settings → Time & language → Language & region → Add a language → **Tiếng Việt**,
+khi chọn thành phần nhớ **tick "Speech"** (mặc định không tick). Tải khoảng 240 MB,
+mất 10–20 phút. Cài xong **đóng hẳn trình duyệt rồi mở lại** — tải lại trang không đủ,
+vì danh sách giọng chỉ đọc lúc khởi động.
+
+Kiểm tra: mở trang, bấm F12, xem Console có dòng `[Giọng] Đang dùng: Microsoft An (vi-VN)`.
+
+| Giọng | Chất lượng | Mạng | Có ở |
+|---|---|---|---|
+| Microsoft An | máy móc, phát âm đúng | không cần | Chrome, Edge (sau khi cài gói) |
+| Microsoft Nam Minh / Hoài My Online (Natural) | rất tự nhiên | **cần mạng** | chỉ Edge |
+| Google Tiếng Việt | tự nhiên | **cần mạng** | chỉ Chrome |
+
+Code chọn giọng ưu tiên **giọng trong máy**, để hôm trình diễn mất mạng vẫn đọc được.
+Muốn đổi sang giọng tự nhiên hơn thì sửa `chonGiong()` trong `static/index.html`.
 
 ## 5. Cấu trúc thư mục
 
@@ -200,7 +224,7 @@ Chi tiết từng trường: mục 8 của `demo-web-nhan-dien.md`.
 | Dải vàng "chưa có ORS_API_KEY" | Dán khóa vào `.env` rồi khởi động lại máy chủ |
 | Dải vàng "chưa nạp được model" | Thả `best.pt` vào thư mục gốc, khởi động lại máy chủ |
 | Bảng sự cố trống dù "Đang thấy" có hiện | Tên lớp lệch — xem `models/README.md` |
-| Bảng có sự cố nhưng tuyến không bao giờ đỏ | `diem_di`/`diem_den` lệch hành trình xe camera — xem mục 4 |
+| Bảng có sự cố nhưng tuyến không bao giờ đỏ khúc nào | `diem_di`/`diem_den` lệch hành trình xe camera — xem mục 4 |
 | Sự cố hiện ngoài biển, sai châu lục | Nhập nhầm `[vĩ độ, kinh độ]` — đảo lại |
 | Một ổ gà tạo nhiều dòng | Tăng `ban_kinh_gop_m` lên 40–50 |
 | Video chạy giật | Tăng `buoc_khung` lên 8–10, giảm `rong_anh_gui` còn 560 |

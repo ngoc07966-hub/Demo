@@ -385,7 +385,10 @@ def gui_supabase(loai, muc_do, vi_tri):
 
 @app.get("/")
 def trang_chu():
-    return FileResponse(GOC / "static" / "index.html")
+    # no-cache: trình duyệt phải hỏi lại máy chủ mỗi lần. Thiếu header này Chrome giữ
+    # bản cũ trong cache, sửa giao diện xong tải lại trang vẫn thấy bản cũ.
+    return FileResponse(GOC / "static" / "index.html",
+                        headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/xe-sau")
