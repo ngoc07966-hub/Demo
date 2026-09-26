@@ -115,11 +115,15 @@ Mọi tham số nằm trong `kich_ban.json`, sửa xong khởi động lại má
 | Khóa | Ý nghĩa | Mặc định |
 |---|---|---|
 | `model` | Đường dẫn model — `best.pt` hoặc `models/v1-20260925/best.pt` | `best.pt` |
+| `loai_model` | Model lúc khởi động: `yolo` hoặc `road_hazard` (đổi được trên giao diện, ô "Model:") | `yolo` |
+| `road_hazard.checkpoint` | Checkpoint của model road_hazard (thử nghiệm) | `../../road_hazard/runs/rdd_det_r18_aug960/best.pt` |
+| `road_hazard.nguong_tin_cay` / `.buoc_khung` | Ngưỡng và bước khung riêng cho road_hazard (chậm hơn YOLO, điểm tin cậy thấp hơn) | `0.35` / `25` |
 | `nguong_tin_cay` | Bỏ phát hiện tin cậy thấp hơn | `0.5` |
 | `buoc_khung` | Cứ bao nhiêu khung chạy YOLO một lần | `5` |
 | `so_khung_xac_nhan` | Số khung xử lý liên tiếp mới xác nhận sự cố | `2` |
 | `ban_kinh_gop_m` | Sự cố cùng loại trong bán kính này coi là một | `25` |
 | `hanh_lang_m` | Sự cố cách tuyến trong khoảng này là **trên tuyến** | `30` |
+| `doan_canh_bao_m` | Tô đỏ đoạn tuyến dài chừng này (m) trước và sau mỗi sự cố; phần còn lại giữ màu thường | `50` |
 | `ban_kinh_ne_m` | Bán kính vùng né quanh sự cố | `40` |
 | `muc_do_doi_tuyen` | Mức độ tối thiểu để hiện nút tìm tuyến né | `3` |
 | `rong_anh_gui` | Chiều rộng ảnh gửi về trình duyệt (px) | `720` |
@@ -179,6 +183,9 @@ WebDemo/
 | `POST` | `/api/anh` | `{ ten, anh, phat_hien: [{ loai, tin_cay, anh_cat }] }` |
 | `POST` | `/api/tuyen-duong` | `{ toa_do, quang_duong_m, thoi_gian_s, la_tuyen_gia }` |
 | `WS` | `/ws/nhan-dien/{video_id}` | Tin `bat_dau` · `khung` · `su_co` · `ket_thuc` · `loi` |
+| `GET` | `/api/su-co?phien=&tu=` | Kho sự cố dùng chung `{ phien, tu, ds }` — trang Xe đi sau đọc mỗi 2 giây |
+| `POST` | `/api/su-co` | Ghi sự cố từ ảnh chụp vào kho chung |
+| `GET` | `/xe-sau` | Trang **Xe đi sau**: cùng tuyến, thấy sự cố xe trước để lại, nút Chạy/Dừng, báo trước `canh_bao_truoc_m`, gợi ý tuyến khác khi phía trước có ≥ `so_su_co_goi_y_doi_tuyen` sự cố |
 
 Thử tay các API tại <http://localhost:8000/docs>.
 Chi tiết từng trường: mục 8 của `demo-web-nhan-dien.md`.

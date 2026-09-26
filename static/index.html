@@ -14,9 +14,14 @@
          font-family:system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
          background:var(--nen); color:var(--chu); }
   header { padding:12px 20px; background:var(--the); border-bottom:1px solid var(--vien);
-           display:flex; align-items:center; gap:12px; }
+           display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
   header h1 { font-size:18px; margin:0; }
+  header label { font-size:13px; color:var(--phu); display:flex; align-items:center; gap:6px; }
+  header select { font:inherit; font-size:13px; padding:5px 8px; border-radius:8px;
+                  border:1px solid var(--vien); background:#fff; color:var(--chu); }
   #trang-thai { margin-left:auto; font-size:13px; color:var(--phu); }
+  .nut-lien-ket { font-size:13px; padding:6px 12px; border-radius:8px; background:var(--lam);
+                  color:#fff; text-decoration:none; white-space:nowrap; }
 
   /* Dải nhắc việc còn thiếu (model / khóa ORS) — ẩn khi đã đủ */
   #nhac-viec { display:none; padding:8px 20px; background:#fef3c7; color:var(--vang);
@@ -86,7 +91,9 @@
 <body>
 <header>
   <h1>Hệ thống nhận diện sự cố và cảnh báo tuyến đường</h1>
+  <label>Model: <select id="chon-model" disabled></select></label>
   <span id="trang-thai">Đang khởi động…</span>
+  <a class="nut-lien-ket" href="/xe-sau" target="_blank" title="Mở trang mô phỏng xe đi sau trên cùng tuyến">Mở trang Xe đi sau ↗</a>
 </header>
 <div id="nhac-viec"></div>
 
@@ -133,7 +140,7 @@
       <div id="tuyen-gia">⚠ Chưa có khóa ORS — tuyến chỉ là đường thẳng minh họa, chưa né được sự cố.</div>
       <div class="chu-thich nho">
         <span><i style="background:var(--lam)"></i>Tuyến an toàn</span>
-        <span><i style="background:var(--do)"></i>Tuyến có sự cố</span>
+        <span><i style="background:var(--do)"></i>Đoạn có sự cố</span>
         <span><i style="background:var(--xanh)"></i>Tuyến né</span>
         <span><i style="background:#6b7280"></i>Hành trình xe camera</span>
         <span><i style="background:#7c3aed"></i>Vị trí ảnh chụp</span>
@@ -196,6 +203,25 @@ function viTriTrenTuyen(p, tuyen) {
   return { d, docTuyen: tuyen.tichLuy[iGan] };
 }
 
+// Khoảng [từ, đến] (mét dọc tuyến) quanh các sự cố; khoảng chồng nhau được gộp. nguyHiem đã sắp theo doc_tuyen.
+function doanNguyHiem(nguyHiem) {
+  const R = tt.kb.doan_canh_bao_m, tong = tt.tuyen.tichLuy.at(-1);
+  const kq = [];
+  for (const s of nguyHiem) {
+    const tu = Math.max(0, s.doc_tuyen - R), den = Math.min(tong, s.doc_tuyen + R);
+    const cuoi = kq.at(-1);
+    if (cuoi && tu <= cuoi[1]) cuoi[1] = Math.max(cuoi[1], den);
+    else kq.push([tu, den]);
+  }
+  return kq;
+}
+
+// Phần tuyến nằm giữa hai mốc quãng đường (tuyến đã chia nhỏ 10 m nên đủ mịn)
+function catTuyen(tuyen, tu, den) {
+  const toaDo = tuyen.min.filter((_, i) => tuyen.tichLuy[i] >= tu && tuyen.tichLuy[i] <= den);
+  return toaDo.length >= 2 ? toaDo : null;
+}
+
 // ─────────── GeoJSON và định dạng ───────────
 const fc = (features) => ({ type: 'FeatureCollection', features });
 const diem = (toaDo, props = {}) => ({ type: 'Feature', geometry: { type: 'Point', coordinates: toaDo }, properties: props });
@@ -212,6 +238,7 @@ async function khoiDong() {
   const kb = tt.kb;
   taoOThongKe();
   nhacViec();
+  taoChonModel();
   hienBanModel();
 
   const map = tt.map = new maplibregl.Map({
@@ -222,7 +249,7 @@ async function khoiDong() {
   map.addControl(new maplibregl.NavigationControl(), 'bottom-right');
 
   map.on('load', () => {
-    for (const id of ['hanh-trinh', 'tuyen-cu', 'tuyen', 'su-co', 'xe-camera']) {
+    for (const id of ['hanh-trinh', 'tuyen-cu', 'tuyen', 'tuyen-do', 'su-co', 'xe-camera']) {
       map.addSource(id, { type: 'geojson', data: fc([]) });
     }
     // Thứ tự thêm = thứ tự vẽ từ dưới lên
@@ -233,6 +260,10 @@ async function khoiDong() {
     map.addLayer({ id: 'lop-tuyen', type: 'line', source: 'tuyen',
       layout: { 'line-join': 'round', 'line-cap': 'round' },
       paint: { 'line-color': MAU.binhThuong, 'line-width': 6 } });
+    // Đoạn đỏ quanh sự cố, vẽ đè lên tuyến
+    map.addLayer({ id: 'lop-tuyen-do', type: 'line', source: 'tuyen-do',
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: { 'line-color': MAU.nguyHiem, 'line-width': 7 } });
     map.addLayer({ id: 'lop-su-co', type: 'circle', source: 'su-co', paint: {
       'circle-color': ['match', ['get', 'loai'],
         ...Object.entries(kb.lop).flatMap(([loai, v]) => [loai, v.mau]), '#888888'],
@@ -259,14 +290,46 @@ async function khoiDong() {
 
 // Thông tin bản train, đọc từ model.json — để người xem biết đang chạy model nào
 function hienBanModel() {
-  const m = tt.kb.thong_tin_model;
-  if (!m) return;
+  const m = tt.kb.thong_tin_model || {};
   const phan = [m.phien_ban, ngayVN(m.ngay_train)];
   if (m.mAP50 != null) phan.push(`mAP50 ${m.mAP50}`);
+  if (tt.kb.loai_model === 'road_hazard') phan.push('thử nghiệm: chỉ ổ gà/vết nứt, chậm trên CPU');
+  const co = phan.filter(Boolean);
   const o = $('ban-model');
-  o.textContent = '· Model ' + phan.filter(Boolean).join(' · ');
-  if (m.dataset) o.title = 'Dataset: ' + m.dataset;
+  o.textContent = co.length ? '· Model ' + co.join(' · ') : '';
+  o.title = m.dataset ? 'Dataset: ' + m.dataset : '';
 }
+
+function taoChonModel() {
+  const o = $('chon-model');
+  o.replaceChildren(...Object.entries(tt.kb.cac_model).map(([loai, ten]) => new Option(ten, loai)));
+  o.value = tt.kb.loai_model;
+  o.disabled = false;
+}
+
+// Đổi model trên máy chủ. Video đang chạy dở vẫn dùng model cũ đến hết.
+$('chon-model').addEventListener('change', async (e) => {
+  const o = e.target, loai = o.value, cu = tt.kb.loai_model;
+  o.disabled = true;
+  bao(`Đang nạp ${tt.kb.cac_model[loai]}…`);
+  try {
+    const r = await fetch('/api/model', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ loai }),
+    });
+    const dl = await r.json();
+    if (!r.ok) throw new Error(dl.detail || `Lỗi ${r.status}`);
+    tt.kb.loai_model = dl.loai_model;
+    tt.kb.thong_tin_model = dl.thong_tin_model;
+    tt.kb.co_model = true;
+    hienBanModel();
+    bao(`Đã chuyển sang ${tt.kb.cac_model[loai]}` + (tt.ws ? ' — áp dụng từ lần nhận diện sau' : ''));
+  } catch (err) {
+    o.value = cu;
+    bao('Không đổi được model: ' + err.message);
+  } finally {
+    o.disabled = false;
+  }
+});
 
 // '2026-09-25' → '25/09/2026'. Định dạng khác thì giữ nguyên.
 function ngayVN(s) {
@@ -363,9 +426,11 @@ function capNhatCanhBao() {
   const nguyHiem = tt.suCo.filter((s) => s.tren_tuyen && s.muc_do >= 2)
                           .sort((a, b) => a.doc_tuyen - b.doc_tuyen);
   if (map.getLayer('lop-tuyen')) {
-    map.setPaintProperty('lop-tuyen', 'line-color',
-      nguyHiem.length ? MAU.nguyHiem : (tt.daDoiTuyen ? MAU.anToan : MAU.binhThuong));
+    map.setPaintProperty('lop-tuyen', 'line-color', tt.daDoiTuyen ? MAU.anToan : MAU.binhThuong);
   }
+  map.getSource('tuyen-do')?.setData(fc(tt.tuyen
+    ? doanNguyHiem(nguyHiem).map(([tu, den]) => catTuyen(tt.tuyen, tu, den)).filter(Boolean).map(duong)
+    : []));
 
   const hop = $('canh-bao');
   hop.replaceChildren();
@@ -538,12 +603,19 @@ $('chon-anh').addEventListener('change', async (e) => {
         if (!tot.has(p.loai) || p.tin_cay > tot.get(p.loai).tin_cay) tot.set(p.loai, p);
       }
       for (const p of tot.values()) {
-        tt.suCo.push({
+        const sc = {
           id: 'a' + (++tt.demAnh), loai: p.loai, muc_do: tt.kb.lop[p.loai]?.muc_do ?? 1,
           tin_cay: p.tin_cay, vi_tri: toaDoGhim(tt.ghimAnh),
           thoi_diem: null, anh_cat: p.anh_cat, nguon: 'anh', ten_tep: dl.ten,
-        });
+        };
+        tt.suCo.push(sc);
         themMoi++;
+        // Ghi vào kho chung để trang "Xe đi sau" cũng thấy. Lỗi thì chỉ mất phần chia sẻ.
+        fetch('/api/su-co', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ loai: sc.loai, tin_cay: sc.tin_cay, vi_tri: sc.vi_tri,
+                                 anh_cat: sc.anh_cat, ten_tep: sc.ten_tep }),
+        }).catch(() => {});
       }
     } catch (err) {
       bao(`Ảnh ${tep.name}: ${err.message}`);

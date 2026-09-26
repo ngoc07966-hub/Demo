@@ -11,6 +11,7 @@ import base64
 import json
 import math
 import os
+import sys
 import time
 import uuid
 from pathlib import Path
@@ -23,6 +24,7 @@ from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSock
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+import torch  # noqa: F401  phải nạp TRƯỚC ultralytics: ultralytics đặt OMP_NUM_THREADS=1, torch nạp sau sẽ chỉ chạy 1 luồng CPU
 from ultralytics import YOLO
 
 GOC = Path(__file__).parent
@@ -78,7 +80,10 @@ def doc_thong_tin_model(duong_dan: Path):
         return None
 
 
-def nap_model():
+LOAI_MODEL = KB.get("loai_model", "yolo")   # "yolo" (mặc định) hoặc "road_hazard"
+
+
+def nap_model_yolo():
     """→ (model, thông tin bản train). Cả hai là None nếu không nạp được."""
     duong_dan = tim_model(KB["model"])
     try:
@@ -110,15 +115,102 @@ def nap_model():
         return None, None
 
 
-model, THONG_TIN_MODEL = nap_model()
+def nap_model_road_hazard():
+    """→ (adapter dict, thông tin bản train). Nạp checkpoint của dự án road_hazard
+    (kiến trúc CNN + FPN + Detection/Seg/Env + Decision Layer, xem road_hazard/AGENTS.md).
+
+    Checkpoint hiện có (rdd_det_r18_aug960) CHỈ train phần detection (pothole, crack) trên
+    RDD2022 — chưa có segmentation/environment/flood, và chậm hơn YOLO nhiều trên CPU. Xem
+    TOM_TAT_CHO_CHAT_MOI.md mục 2.3 trước khi coi đây là model chính thức của báo cáo.
+    """
+    rh = KB.get("road_hazard", {})
+    ma_nguon = (GOC / rh.get("duong_dan_code", "../../road_hazard")).resolve()
+    duong_dan = (GOC / rh.get("checkpoint", "../../road_hazard/runs/rdd_det_r18_aug960/best.pt")).resolve()
+    if not ma_nguon.is_dir():
+        print(f"[Model] road_hazard ✗ Không thấy thư mục mã nguồn: {ma_nguon}")
+        return None, None
+    if not duong_dan.exists():
+        print(f"[Model] road_hazard ✗ Không thấy checkpoint: {duong_dan}")
+        return None, None
+    try:
+        if str(ma_nguon) not in sys.path:
+            sys.path.insert(0, str(ma_nguon))
+        import torch
+        from config import DET_CLASSES, ModelConfig
+        from model import RoadHazardNet, StreamingRunner
+        from reproducibility import resolve_device
+
+        device = resolve_device("auto")
+        ck = torch.load(str(duong_dan), map_location=device, weights_only=False)
+        cfg = ModelConfig(**{**ck["cfg"], "pretrained": False})
+        net = RoadHazardNet(cfg).to(device)
+        net.load_state_dict(ck["model"])
+        net.eval()
+        tasks = tuple(ck.get("tasks") or ("det",))
+        print(f"[Model] road_hazard: đã nạp {duong_dan}")
+        print(f"[Model] road_hazard: task đã train = {tasks}, img_size = {cfg.img_size}, thiết bị = {device}")
+        if "seg" not in tasks:
+            print("[Model] road_hazard ⚠ chưa train segmentation -> KHÔNG lọc theo mặt đường")
+        if "env" not in tasks:
+            print("[Model] road_hazard ⚠ chưa train environment -> KHÔNG có nhãn thời tiết")
+        thieu = [l for l in KB["lop"] if l not in DET_CLASSES]
+        if thieu:
+            print(f"[Model] road_hazard ⚠ Lớp khai trong kich_ban.json nhưng model KHÔNG có: {thieu}")
+
+        # Nhánh segmentation chưa train thì không tính, đỡ ~50 ms/khung trên CPU
+        adapter = {"runner": StreamingRunner(net, with_seg="seg" in tasks), "device": device,
+                   "tasks": tasks, "img_size": cfg.img_size}
+        tt = {"phien_ban": f"road_hazard ({duong_dan.parent.name}, {cfg.backbone}, {cfg.img_size}px)",
+              "checkpoint": str(duong_dan),
+              "tasks": list(tasks), "dataset": "RDD2022 (chỉ pothole, crack)"}
+        return adapter, tt
+    except Exception as e:
+        print(f"[Model] road_hazard ✗ Không nạp được '{duong_dan}': {e}")
+        return None, None
+
+
+CAC_MODEL = {
+    "yolo": {"ten": "YOLO11n (model chính)", "nap": nap_model_yolo},
+    "road_hazard": {"ten": "road_hazard (thử nghiệm)", "nap": nap_model_road_hazard},
+}
+DA_NAP = {}                               # loại → (model, thông tin); nạp lần đầu khi cần
+
+
+def lay_model(loai):
+    """Nạp model nếu chưa có (hoặc lần trước nạp lỗi) rồi giữ lại để đổi qua lại cho nhanh."""
+    if DA_NAP.get(loai, (None, None))[0] is None:
+        DA_NAP[loai] = CAC_MODEL[loai]["nap"]()
+    return DA_NAP[loai]
+
+
+if LOAI_MODEL not in CAC_MODEL:
+    print(f"[Model] ⚠ loai_model '{LOAI_MODEL}' không hợp lệ (chỉ nhận {list(CAC_MODEL)}) — dùng yolo")
+    LOAI_MODEL = "yolo"
+model, THONG_TIN_MODEL = lay_model(LOAI_MODEL)
+KHOA_DOI_MODEL = asyncio.Lock()
+
+
+def ten_model_hien_thi():
+    if LOAI_MODEL == "yolo":
+        return KB["model"]
+    return KB.get("road_hazard", {}).get("checkpoint", "road_hazard")
+
+
 app = FastAPI(title="Demo nhận diện sự cố giao thông")
 app.mount("/static", StaticFiles(directory=GOC / "static"), name="static")
 
-# Supabase — tùy chọn, bật trong kich_ban.json
+# Supabase — bật/tắt trong kich_ban.json, nhưng URL/khóa lấy từ .env (không đưa khóa lên Git)
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip() or KB.get("supabase", {}).get("url", "")
+SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY", "").strip() or KB.get("supabase", {}).get("anon_key", "")
+
 sb = None
 if KB.get("supabase", {}).get("bat"):
-    from supabase import create_client
-    sb = create_client(KB["supabase"]["url"], KB["supabase"]["anon_key"])
+    if SUPABASE_URL and SUPABASE_ANON_KEY:
+        from supabase import create_client
+        sb = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+        print("[Supabase] Đã kết nối — sự cố nhận diện được sẽ gửi lên bảng su_co.")
+    else:
+        print("[Supabase] ⚠ Đã bật trong kich_ban.json nhưng thiếu SUPABASE_URL / SUPABASE_ANON_KEY trong .env")
 
 
 # ─────────────────────────── Hình học ───────────────────────────
@@ -196,9 +288,8 @@ def ma_hoa_jpeg(anh, rong_toi_da, chat_luong=70):
     return "data:image/jpeg;base64," + base64.b64encode(buf).decode()
 
 
-def xu_ly_khung(khung):
-    """Chạy YOLO trên một khung hình. Được gọi trong luồng phụ để không chặn máy chủ."""
-    r = model.predict(khung, conf=KB["nguong_tin_cay"], imgsz=640, verbose=False)[0]
+def xu_ly_khung_yolo(khung, m):
+    r = m.predict(khung, conf=KB["nguong_tin_cay"], imgsz=640, verbose=False)[0]
     phat_hien = []
     for box in r.boxes:
         loai = r.names[int(box.cls.item())]
@@ -212,6 +303,74 @@ def xu_ly_khung(khung):
             "anh_cat": ma_hoa_jpeg(cat, 200) if cat.size else None,
         })
     return ma_hoa_jpeg(r.plot(), KB["rong_anh_gui"]), phat_hien
+
+
+def xu_ly_khung_road_hazard(khung, m):
+    """Chạy model road_hazard (chỉ phần detection) trên một khung hình.
+
+    Không dùng Decision Layer / tracker riêng của road_hazard ở đây — việc xác nhận qua
+    nhiều khung liên tiếp đã do main.py tự làm (biến dem_lien_tiep), giống hệt nhánh YOLO,
+    để hai model so sánh được công bằng với cùng một luật xác nhận.
+    """
+    import torch
+    from decision import decode_detections
+    from data.transforms import letterbox, boxes_from_letterbox
+
+    S = m["img_size"]
+    lb, params = letterbox(khung, S)
+    rgb = cv2.cvtColor(lb, cv2.COLOR_BGR2RGB)
+    x = torch.from_numpy(rgb).permute(2, 0, 1)[None].float().div(255).to(m["device"])
+    with torch.no_grad():
+        out = m["runner"].step(x)
+    # Điểm heatmap CenterNet thấp hơn điểm YOLO nên cần ngưỡng riêng (mặc định 0.35 như DecisionConfig)
+    dets = decode_detections(out, KB.get("road_hazard", {}).get("nguong_tin_cay", 0.35))[0]
+
+    anh_ve = khung.copy()
+    phat_hien = []
+    h, w = khung.shape[:2]
+    for d in dets:
+        loai = d["cls"]
+        if loai not in KB["lop"]:
+            continue
+        x1, y1, x2, y2 = boxes_from_letterbox([d["bbox"]], params)[0].tolist()
+        x1, y1 = max(int(x1), 0), max(int(y1), 0)
+        x2, y2 = min(int(x2), w), min(int(y2), h)
+        cv2.rectangle(anh_ve, (x1, y1), (x2, y2), (0, 165, 255), 2)
+        cv2.putText(anh_ve, f"{loai} {d['score']:.2f}", (x1, max(y1 - 5, 0)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 1)
+        cat = khung[y1:y2, x1:x2]
+        phat_hien.append({
+            "loai": loai,
+            "tin_cay": round(float(d["score"]), 3),
+            "anh_cat": ma_hoa_jpeg(cat, 200) if cat.size else None,
+        })
+    return ma_hoa_jpeg(anh_ve, KB["rong_anh_gui"]), phat_hien
+
+
+def xu_ly_khung(khung, loai, m):
+    """Chạy model trên một khung hình. Được gọi trong luồng phụ để không chặn máy chủ."""
+    if loai == "road_hazard":
+        return xu_ly_khung_road_hazard(khung, m)
+    return xu_ly_khung_yolo(khung, m)
+
+
+# ─────────────── Kho sự cố dùng chung (trang "Xe đi sau" đọc lại) ───────────────
+# Giữ trong bộ nhớ máy chủ: khởi động lại là mất. Mỗi lần chạy video mới là một
+# "phiên" mới — xe sau thấy phiên đổi thì tải lại toàn bộ danh sách.
+
+KHO_SU_CO = {"phien": uuid.uuid4().hex[:8], "ds": []}
+
+
+def phien_moi():
+    KHO_SU_CO["phien"] = uuid.uuid4().hex[:8]
+    KHO_SU_CO["ds"] = []
+
+
+def luu_su_co(sc):
+    """Ghi một sự cố vào kho chung, trả về bản đã lưu (có mã và giờ ghi nhận)."""
+    ban = {**sc, "ma": len(KHO_SU_CO["ds"]) + 1, "luc": time.time()}
+    KHO_SU_CO["ds"].append(ban)
+    return ban
 
 
 def gui_supabase(loai, muc_do, vi_tri):
@@ -229,6 +388,36 @@ def trang_chu():
     return FileResponse(GOC / "static" / "index.html")
 
 
+@app.get("/xe-sau")
+def trang_xe_sau():
+    return FileResponse(GOC / "static" / "xe_sau.html")
+
+
+@app.get("/api/su-co")
+def ds_su_co(phien: str = "", tu: int = 0):
+    """Sự cố đã ghi nhận. Cùng phiên thì chỉ trả phần mới (từ vị trí `tu`), khác phiên thì trả hết."""
+    if phien != KHO_SU_CO["phien"]:
+        tu = 0
+    return {"phien": KHO_SU_CO["phien"], "tu": tu, "ds": KHO_SU_CO["ds"][tu:]}
+
+
+class SuCoAnh(BaseModel):
+    loai: str
+    tin_cay: float
+    vi_tri: list[float]                   # [kinh độ, vĩ độ]
+    anh_cat: str | None = None
+    ten_tep: str | None = None
+
+
+@app.post("/api/su-co")
+def them_su_co_anh(sc: SuCoAnh):
+    """Sự cố tìm thấy trong ảnh chụp (vị trí do trình duyệt gán) — ghi vào kho chung như sự cố từ video."""
+    if sc.loai not in KB["lop"]:
+        raise HTTPException(400, f"Loại không hợp lệ: {sc.loai}")
+    return luu_su_co({**sc.model_dump(), "muc_do": KB["lop"][sc.loai]["muc_do"],
+                      "thoi_diem": None, "nguon": "anh"})
+
+
 @app.get("/api/kich-ban")
 def kich_ban():
     return {
@@ -236,15 +425,43 @@ def kich_ban():
         "diem_di": KB["diem_di"], "diem_den": KB["diem_den"],
         "hanh_trinh_xe_camera": HANH_TRINH,
         "hanh_lang_m": KB["hanh_lang_m"], "muc_do_doi_tuyen": KB["muc_do_doi_tuyen"],
+        "doan_canh_bao_m": KB.get("doan_canh_bao_m", 50),
+        "ban_kinh_ne_m": KB["ban_kinh_ne_m"],
+        "canh_bao_truoc_m": KB.get("canh_bao_truoc_m", 300),
+        "so_su_co_goi_y_doi_tuyen": KB.get("so_su_co_goi_y_doi_tuyen", 3),
         "lop": KB["lop"],
         # Hai cờ trạng thái để giao diện báo cho người dùng biết đang thiếu gì
         "co_model": model is not None,
         "co_khoa_ors": bool(ORS_API_KEY),
         # Thông tin bản train, đọc từ model.json cạnh file model (có thể là None)
         "thong_tin_model": THONG_TIN_MODEL,
+        "loai_model": LOAI_MODEL,
+        "cac_model": {k: v["ten"] for k, v in CAC_MODEL.items()},
         # True khi đang chạy kich_ban.thu.json — giao diện hiện dải nhắc
         "che_do_thu": bool(KB.get("che_do_thu")),
     }
+
+
+class YeuCauDoiModel(BaseModel):
+    loai: str
+
+
+@app.post("/api/model")
+async def doi_model(yc: YeuCauDoiModel):
+    """Đổi model đang dùng mà không cần khởi động lại máy chủ.
+
+    Video đang chạy dở vẫn giữ model lúc bắt đầu; model mới áp dụng cho lần nhận diện sau.
+    """
+    global LOAI_MODEL, model, THONG_TIN_MODEL
+    if yc.loai not in CAC_MODEL:
+        raise HTTPException(400, f"Model không hợp lệ. Chỉ nhận: {list(CAC_MODEL)}")
+    async with KHOA_DOI_MODEL:
+        m, tt = await asyncio.to_thread(lay_model, yc.loai)
+        if m is None:
+            raise HTTPException(503, f"Không nạp được model {CAC_MODEL[yc.loai]['ten']} — xem log máy chủ.")
+        LOAI_MODEL, model, THONG_TIN_MODEL = yc.loai, m, tt
+    print(f"[Model] Đã chuyển sang: {CAC_MODEL[yc.loai]['ten']}")
+    return {"loai_model": LOAI_MODEL, "thong_tin_model": THONG_TIN_MODEL}
 
 
 @app.post("/api/video")
@@ -274,9 +491,10 @@ async def tai_anh(tep: UploadFile = File(...)):
     Trả về ảnh đã vẽ khung và danh sách phát hiện. Vị trí sự cố do trình duyệt
     gán (ghim tím trên bản đồ), vì ảnh chụp không có tiến độ để nội suy như video.
     """
-    if model is None:
-        raise HTTPException(503, f"Chưa nạp được model '{KB['model']}'. "
-                                 "Đặt best.pt cạnh main.py rồi khởi động lại máy chủ.")
+    loai, m = LOAI_MODEL, model
+    if m is None:
+        raise HTTPException(503, f"Chưa nạp được model '{ten_model_hien_thi()}'. "
+                                 "Kiểm tra đường dẫn model trong kich_ban.json rồi khởi động lại máy chủ.")
     duoi = Path(tep.filename or "").suffix.lower()
     if duoi not in {".jpg", ".jpeg", ".png", ".bmp", ".webp"}:
         raise HTTPException(400, "Chỉ nhận ảnh .jpg, .jpeg, .png, .bmp, .webp")
@@ -287,7 +505,7 @@ async def tai_anh(tep: UploadFile = File(...)):
         raise HTTPException(400, "Không đọc được ảnh — tệp hỏng hoặc sai định dạng")
 
     # Dùng lại đúng hàm xử lý của video: cùng ngưỡng tin cậy, cùng cách lọc lớp và cắt ảnh
-    anh_ve, phat_hien = await asyncio.to_thread(xu_ly_khung, anh)
+    anh_ve, phat_hien = await asyncio.to_thread(xu_ly_khung, anh, loai, m)
     return {"ten": tep.filename, "anh": anh_ve, "phat_hien": phat_hien}
 
 
@@ -295,10 +513,11 @@ async def tai_anh(tep: UploadFile = File(...)):
 async def nhan_dien(ws: WebSocket, video_id: str):
     await ws.accept()
 
-    if model is None:
+    loai_model, m = LOAI_MODEL, model     # giữ cố định suốt video, dù có đổi model giữa chừng
+    if m is None:
         await ws.send_json({"loai_tin": "loi", "noi_dung":
-                            f"Chưa nạp được model '{KB['model']}'. "
-                            "Đặt best.pt cạnh main.py (hoặc trong models/) rồi khởi động lại máy chủ."})
+                            f"Chưa nạp được model '{ten_model_hien_thi()}'. "
+                            "Kiểm tra đường dẫn model trong kich_ban.json rồi khởi động lại máy chủ."})
         await ws.close()
         return
 
@@ -312,7 +531,10 @@ async def nhan_dien(ws: WebSocket, video_id: str):
     so_khung = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     fps = cap.get(cv2.CAP_PROP_FPS) or 30
     buoc = KB["buoc_khung"]
+    if loai_model == "road_hazard":       # model chậm hơn nhiều → bỏ qua nhiều khung hơn để theo kịp video
+        buoc = KB.get("road_hazard", {}).get("buoc_khung", buoc)
     da_bao = []                           # [(loai, vi_tri)] — chống báo trùng
+    phien_moi()                           # chạy video mới → xe sau bắt đầu lại từ danh sách trống
     dem_lien_tiep = {loai: 0 for loai in KB["lop"]}
     so_su_co = 0
     bat_dau = time.perf_counter()
@@ -333,7 +555,7 @@ async def nhan_dien(ws: WebSocket, video_id: str):
             thoi_diem = chi_so / fps
             tien_do = chi_so / max(so_khung - 1, 1)
             vi_tri = vi_tri_theo_tien_do(HANH_TRINH, tien_do)
-            anh, phat_hien = await asyncio.to_thread(xu_ly_khung, khung)
+            anh, phat_hien = await asyncio.to_thread(xu_ly_khung, khung, loai_model, m)
 
             # Chỉ xác nhận sự cố khi thấy ở N khung xử lý liên tiếp → giảm báo nhầm
             thay = {p["loai"] for p in phat_hien}
@@ -349,7 +571,7 @@ async def nhan_dien(ws: WebSocket, video_id: str):
 
             for p in sorted(phat_hien, key=lambda p: -p["tin_cay"]):
                 loai = p["loai"]
-                if dem_lien_tiep[loai] != KB["so_khung_xac_nhan"]:
+                if dem_lien_tiep[loai] < KB["so_khung_xac_nhan"]:
                     continue
                 if any(l == loai and khoang_cach_m(v, vi_tri) < KB["ban_kinh_gop_m"]
                        for l, v in da_bao):
@@ -357,11 +579,11 @@ async def nhan_dien(ws: WebSocket, video_id: str):
                 da_bao.append((loai, vi_tri))
                 so_su_co += 1
                 muc_do = KB["lop"][loai]["muc_do"]
-                await ws.send_json({
-                    "loai_tin": "su_co", "id": so_su_co, "loai": loai, "muc_do": muc_do,
-                    "tin_cay": p["tin_cay"], "vi_tri": vi_tri,
-                    "thoi_diem": round(thoi_diem, 2), "anh_cat": p["anh_cat"],
-                })
+                sc = {"id": so_su_co, "loai": loai, "muc_do": muc_do,
+                      "tin_cay": p["tin_cay"], "vi_tri": vi_tri,
+                      "thoi_diem": round(thoi_diem, 2), "anh_cat": p["anh_cat"], "nguon": "video"}
+                luu_su_co(sc)
+                await ws.send_json({"loai_tin": "su_co", **sc})
                 if sb:
                     asyncio.create_task(asyncio.to_thread(gui_supabase, loai, muc_do, vi_tri))
 

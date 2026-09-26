@@ -1,0 +1,708 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Xe đi sau — cảnh báo sự cố</title>
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<style>
+  :root { --nen:#f3f4f6; --the:#fff; --chu:#111827; --phu:#6b7280; --vien:#e5e7eb;
+          --do:#dc2626; --xanh:#16a34a; --lam:#2563eb; --vang:#b45309; --cam:#f59e0b; }
+  * { box-sizing:border-box; }
+  body { margin:0; height:100vh; display:flex; flex-direction:column;
+         font-family:system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+         background:var(--nen); color:var(--chu); }
+  header { padding:12px 20px; background:var(--the); border-bottom:1px solid var(--vien);
+           display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  header h1 { font-size:18px; margin:0; }
+  #trang-thai { margin-left:auto; font-size:13px; color:var(--phu); }
+  .nut-lien-ket { font-size:13px; padding:6px 12px; border-radius:8px; border:1px solid var(--vien);
+                  color:var(--chu); text-decoration:none; white-space:nowrap; background:#fff; }
+  #nhac-viec { display:none; padding:8px 20px; background:#fef3c7; color:var(--vang);
+               font-size:13px; border-bottom:1px solid #fde68a; }
+
+  /* Bố cục: trái = điều khiển + cảnh báo + danh sách, phải = bản đồ */
+  .luoi { flex:1; min-height:0; display:grid; gap:16px; padding:16px;
+          grid-template-columns:minmax(360px, 1fr) 1.6fr; }
+  .cot-trai { display:flex; flex-direction:column; gap:12px; min-height:0; }
+  .the { background:var(--the); border:1px solid var(--vien); border-radius:12px; padding:14px;
+         display:flex; flex-direction:column; min-height:0; }
+  .the h2 { font-size:15px; margin:0 0 10px; }
+  #p-ban-do { position:relative; padding:0; overflow:hidden; }
+  #p-ds { flex:1; }
+
+  .hang { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  button { font:inherit; font-size:14px; padding:8px 16px; border-radius:8px;
+           border:1px solid var(--vien); background:#fff; cursor:pointer; }
+  button.chinh { background:var(--lam); color:#fff; border-color:var(--lam); }
+  button.xanh { background:var(--xanh); color:#fff; border-color:var(--xanh); }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  select { font:inherit; font-size:13px; padding:6px 8px; border-radius:8px; border:1px solid var(--vien); background:#fff; }
+  .nho { font-size:12px; color:var(--phu); }
+  .thanh { height:8px; background:var(--vien); border-radius:4px; margin-top:10px; overflow:hidden; }
+  .thanh > div { height:100%; width:0; background:var(--lam); }
+
+  /* Ô cảnh báo phía trước — đổi màu theo mức */
+  #canh-bao-truoc { border-radius:12px; padding:14px; color:#fff; background:var(--xanh); }
+  #canh-bao-truoc.vang { background:var(--cam); color:#111827; }
+  #canh-bao-truoc.do { background:var(--do); }
+  #canh-bao-truoc .lon { font-size:20px; font-weight:700; }
+  #canh-bao-truoc .phu { font-size:13px; margin-top:4px; opacity:.9; }
+
+  /* Ô gợi ý tuyến */
+  #goi-y { display:none; border:2px solid var(--xanh); }
+  #goi-y.hien { display:flex; }
+  #goi-y.thong-tin { border-color:var(--vien); }
+  #goi-y p { margin:0 0 8px; font-size:14px; }
+
+  .bang-cuon { overflow:auto; flex:1; min-height:0; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th, td { text-align:left; padding:6px; border-bottom:1px solid var(--vien); vertical-align:middle; }
+  thead th { position:sticky; top:0; background:var(--the); }
+  tbody tr { cursor:pointer; }
+  tbody tr:hover { background:var(--nen); }
+  tbody tr.da-qua { opacity:.45; }
+  td img { width:56px; height:40px; object-fit:cover; border-radius:4px; display:block; }
+  .chip { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; color:#fff; }
+  .nhan { font-size:12px; padding:2px 6px; border-radius:4px; white-space:nowrap; }
+  .nhan.truoc { background:#fee2e2; color:var(--do); }
+  .nhan.qua, .nhan.ngoai { background:var(--nen); color:var(--phu); }
+
+  #ban-do { position:absolute; inset:0; }
+  #hop-tuyen { position:absolute; top:12px; left:12px; right:12px; z-index:2; background:#fff;
+               border-radius:10px; padding:10px 12px; box-shadow:0 2px 8px rgba(0,0,0,.15); font-size:13px; }
+  .chu-thich { display:flex; gap:12px; flex-wrap:wrap; margin-top:6px; }
+  .chu-thich i { display:inline-block; width:14px; height:4px; border-radius:2px; vertical-align:middle; margin-right:4px; }
+  .popup img { width:180px; border-radius:6px; display:block; margin-top:6px; }
+
+  @media (max-width:900px) {
+    body { height:auto; }
+    .luoi { grid-template-columns:1fr; }
+    #p-ban-do { height:70vh; }
+    .bang-cuon { max-height:50vh; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Xe đi sau — cảnh báo sự cố do xe trước để lại</h1>
+  <span id="trang-thai">Đang khởi động…</span>
+  <a class="nut-lien-ket" href="/" target="_blank">← Trang nhận diện (xe trước)</a>
+</header>
+<div id="nhac-viec"></div>
+
+<main class="luoi">
+  <div class="cot-trai">
+    <!-- ĐIỀU KHIỂN XE -->
+    <section class="the">
+      <h2>1. Hành trình xe đi sau</h2>
+      <div class="hang">
+        <button class="chinh" id="nut-chay">▶ Chạy</button>
+        <button id="nut-dung" disabled>⏸ Dừng</button>
+        <button id="nut-dat-lai">⟲ Về điểm đi</button>
+        <label class="nho">Tốc độ
+          <select id="toc-do">
+            <option value="1">×1 (30 km/h)</option>
+            <option value="5">×5</option>
+            <option value="10" selected>×10</option>
+            <option value="20">×20</option>
+          </select>
+        </label>
+        <label class="nho"><input type="checkbox" id="bam-xe" checked> Bám theo xe</label>
+        <label class="nho"><input type="checkbox" id="doc-canh-bao" checked> Đọc cảnh báo</label>
+      </div>
+      <div class="thanh"><div id="tien-do"></div></div>
+      <div class="hang nho" style="margin-top:6px; justify-content:space-between">
+        <span id="da-di">Chưa xuất phát</span>
+        <span id="con-lai"></span>
+      </div>
+    </section>
+
+    <!-- CẢNH BÁO PHÍA TRƯỚC -->
+    <section id="canh-bao-truoc">
+      <div class="lon" id="cb-lon">Đường phía trước thông thoáng</div>
+      <div class="phu" id="cb-phu">Chưa có sự cố nào do xe trước báo trên tuyến này</div>
+    </section>
+
+    <!-- GỢI Ý TUYẾN -->
+    <section class="the" id="goi-y">
+      <h2 id="gy-tieu-de">Gợi ý tuyến khác</h2>
+      <p id="gy-noi-dung"></p>
+      <div class="hang" id="gy-nut">
+        <button class="xanh" id="nut-di-goi-y">Đi tuyến gợi ý</button>
+        <button id="nut-giu-tuyen">Giữ tuyến hiện tại</button>
+      </div>
+    </section>
+
+    <!-- DANH SÁCH SỰ CỐ -->
+    <section class="the" id="p-ds">
+      <h2>2. Sự cố do xe trước để lại <span class="nho" id="so-su-co"></span></h2>
+      <div class="bang-cuon">
+        <table>
+          <thead><tr><th>Ảnh</th><th>Loại</th><th>Báo lúc</th><th>Vị trí</th></tr></thead>
+          <tbody id="bang-su-co"></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <!-- BẢN ĐỒ -->
+  <section class="the" id="p-ban-do">
+    <div id="ban-do"></div>
+    <div id="hop-tuyen">
+      <b>3. Bản đồ</b> — kéo ghim xanh (điểm đi) / đỏ (điểm đến) khi xe chưa chạy để đổi tuyến
+      <div id="thong-tin-tuyen" class="nho"></div>
+      <div class="chu-thich nho">
+        <span><i style="background:var(--lam)"></i>Tuyến đang đi</span>
+        <span><i style="background:var(--do)"></i>Đoạn có sự cố</span>
+        <span><i style="background:var(--xanh)"></i>Tuyến gợi ý</span>
+        <span><i style="background:#9ca3af"></i>Đã đi</span>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const MAU = { tuyen: '#2563eb', nguyHiem: '#dc2626', goiY: '#16a34a', daDi: '#9ca3af' };
+const TOC_DO_GOC = 30 / 3.6;               // m/s — 30 km/h ở mức ×1
+
+// Trạng thái chung của trang
+const tt = {
+  kb: null, map: null, ghimDi: null, ghimDen: null, popup: null,
+  tuyen: null,            // tuyến đang đi: { toa_do, quang_duong_m, thoi_gian_s, min, tichLuy }
+  viTri: 0,               // quãng đường xe đã đi trên tuyến hiện tại (m)
+  daDiTruoc: 0,           // quãng đường đã đi trên các tuyến trước khi đổi (m)
+  daDiToaDo: [],          // các đoạn đã đi trên tuyến cũ, để vẽ vệt xám
+  chay: false, lanTruoc: 0, lanBam: 0, lanVeBang: 0,
+  suCo: [], phien: '',    // sự cố đọc từ máy chủ
+  goiY: null,             // { tuyen, tranh, conLai, them }
+  daXet: new Set(),       // mã sự cố đã dùng để xét gợi ý — chỉ xét lại khi có sự cố mới
+  henXet: null, dangXet: false,
+  chayLaiSauGoiY: false,
+  daDoc: new Set(), lanDoc: 0,
+  soDaQua: -1,
+};
+
+// ─────────── Hình học (tọa độ luôn là [kinh độ, vĩ độ]) ───────────
+function khoangCach(a, b) {
+  const R = 6371000, r = Math.PI / 180;
+  const dLat = (b[1] - a[1]) * r, dLon = (b[0] - a[0]) * r;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(a[1] * r) * Math.cos(b[1] * r) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+// Chèn thêm điểm để hai điểm liên tiếp cách nhau không quá `buoc` mét
+function chiaNho(toaDo, buoc = 10) {
+  const kq = [toaDo[0]];
+  for (let i = 0; i < toaDo.length - 1; i++) {
+    const a = toaDo[i], b = toaDo[i + 1];
+    const n = Math.max(1, Math.ceil(khoangCach(a, b) / buoc));
+    for (let k = 1; k <= n; k++) kq.push([a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n]);
+  }
+  return kq;
+}
+
+function taoTuyen(dl) {
+  const min = chiaNho(dl.toa_do);
+  const tichLuy = [0];
+  for (let i = 1; i < min.length; i++) tichLuy.push(tichLuy[i - 1] + khoangCach(min[i - 1], min[i]));
+  return { ...dl, min, tichLuy };
+}
+const tongTuyen = (tuyen) => tuyen.tichLuy.at(-1);
+
+// → { d: khoảng cách tới tuyến (m), docTuyen: quãng đường từ đầu tuyến tới đó (m) }
+function viTriTrenTuyen(p, tuyen) {
+  let d = Infinity, iGan = 0;
+  tuyen.min.forEach((q, i) => { const x = khoangCach(p, q); if (x < d) { d = x; iGan = i; } });
+  return { d, docTuyen: tuyen.tichLuy[iGan] };
+}
+
+// Tọa độ tại mốc quãng đường m trên tuyến (tìm nhị phân rồi nội suy)
+function diemTai(tuyen, m) {
+  const t = tuyen.tichLuy;
+  if (m <= 0) return tuyen.min[0];
+  if (m >= t.at(-1)) return tuyen.min.at(-1);
+  let lo = 0, hi = t.length - 1;
+  while (hi - lo > 1) { const g = (lo + hi) >> 1; if (t[g] <= m) lo = g; else hi = g; }
+  const f = (m - t[lo]) / ((t[hi] - t[lo]) || 1);
+  const a = tuyen.min[lo], b = tuyen.min[hi];
+  return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f];
+}
+
+// Phần tuyến nằm giữa hai mốc quãng đường
+function catTuyen(tuyen, tu, den) {
+  const toaDo = tuyen.min.filter((_, i) => tuyen.tichLuy[i] >= tu && tuyen.tichLuy[i] <= den);
+  return toaDo.length >= 2 ? toaDo : null;
+}
+
+// Khoảng [từ, đến] quanh các sự cố; khoảng chồng nhau được gộp. ds đã sắp theo doc_tuyen.
+function doanNguyHiem(ds) {
+  const R = tt.kb.doan_canh_bao_m, tong = tongTuyen(tt.tuyen);
+  const kq = [];
+  for (const s of ds) {
+    const tu = Math.max(0, s.doc_tuyen - R), den = Math.min(tong, s.doc_tuyen + R);
+    const cuoi = kq.at(-1);
+    if (cuoi && tu <= cuoi[1]) cuoi[1] = Math.max(cuoi[1], den);
+    else kq.push([tu, den]);
+  }
+  return kq;
+}
+
+// ─────────── GeoJSON và định dạng ───────────
+const fc = (features) => ({ type: 'FeatureCollection', features });
+const diem = (toaDo, props = {}) => ({ type: 'Feature', geometry: { type: 'Point', coordinates: toaDo }, properties: props });
+const duong = (toaDo) => ({ type: 'Feature', geometry: { type: 'LineString', coordinates: toaDo }, properties: {} });
+const km = (m) => (m >= 1000 ? `${(m / 1000).toFixed(1).replace('.', ',')} km` : `${Math.round(m)} m`);
+const phut = (s) => `${Math.max(1, Math.round(s / 60))} phút`;
+const gio = (luc) => new Date(luc * 1000).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+const tenLop = (loai) => tt.kb.lop[loai]?.ten ?? loai;
+const mauLop = (loai) => tt.kb.lop[loai]?.mau ?? '#888888';
+const bao = (noiDung) => { $('trang-thai').textContent = noiDung; };
+const toaDoGhim = (ghim) => { const p = ghim.getLngLat(); return [p.lng, p.lat]; };
+const viTriXe = () => diemTai(tt.tuyen, tt.viTri);
+const tocDo = () => TOC_DO_GOC * Number($('toc-do').value);
+
+// Sự cố đáng cảnh báo còn ở PHÍA TRƯỚC xe trên tuyến hiện tại, gần nhất trước
+const phiaTruoc = () => tt.suCo
+  .filter((s) => s.tren_tuyen && s.muc_do >= 2 && s.doc_tuyen > tt.viTri)
+  .sort((a, b) => a.doc_tuyen - b.doc_tuyen);
+
+// ─────────── Khởi động bản đồ ───────────
+async function khoiDong() {
+  tt.kb = await (await fetch('/api/kich-ban')).json();
+  const kb = tt.kb;
+  if (!kb.co_khoa_ors) {
+    const o = $('nhac-viec');
+    o.innerHTML = '⚠ Chưa có <b>ORS_API_KEY</b> trong file .env — tuyến chỉ là đường thẳng minh họa, không gợi ý được tuyến né.';
+    o.style.display = 'block';
+  }
+
+  const map = tt.map = new maplibregl.Map({
+    container: 'ban-do',
+    style: 'https://tiles.openfreemap.org/styles/liberty',
+    center: kb.tam_ban_do, zoom: kb.zoom,
+  });
+  map.addControl(new maplibregl.NavigationControl(), 'bottom-right');
+
+  map.on('load', async () => {
+    for (const id of ['da-di', 'tuyen', 'tuyen-do', 'tuyen-goi-y', 'su-co', 'xe']) {
+      map.addSource(id, { type: 'geojson', data: fc([]) });
+    }
+    map.addLayer({ id: 'lop-da-di', type: 'line', source: 'da-di',
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: { 'line-color': MAU.daDi, 'line-width': 6 } });
+    map.addLayer({ id: 'lop-tuyen', type: 'line', source: 'tuyen',
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: { 'line-color': MAU.tuyen, 'line-width': 6 } });
+    map.addLayer({ id: 'lop-tuyen-do', type: 'line', source: 'tuyen-do',
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: { 'line-color': MAU.nguyHiem, 'line-width': 7 } });
+    map.addLayer({ id: 'lop-tuyen-goi-y', type: 'line', source: 'tuyen-goi-y',
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: { 'line-color': MAU.goiY, 'line-width': 6, 'line-dasharray': [1.5, 1] } });
+    map.addLayer({ id: 'lop-su-co', type: 'circle', source: 'su-co', paint: {
+      'circle-color': ['match', ['get', 'loai'],
+        ...Object.entries(kb.lop).flatMap(([loai, v]) => [loai, v.mau]), '#888888'],
+      'circle-radius': ['match', ['get', 'muc_do'], 3, 11, 2, 8, 6],
+      'circle-opacity': ['case', ['get', 'mo'], 0.35, 1],
+      'circle-stroke-color': '#ffffff', 'circle-stroke-width': 2 } });
+    map.addLayer({ id: 'lop-xe', type: 'circle', source: 'xe', paint: {
+      'circle-color': MAU.tuyen, 'circle-radius': 10, 'circle-stroke-color': '#ffffff', 'circle-stroke-width': 3 } });
+
+    // Bấm vào chấm sự cố → xem ảnh xe trước chụp được
+    map.on('click', 'lop-su-co', (e) => {
+      const s = tt.suCo.find((x) => x.ma === e.features[0].properties.ma);
+      if (s) moPopup(s);
+    });
+    map.on('mouseenter', 'lop-su-co', () => { map.getCanvas().style.cursor = 'pointer'; });
+    map.on('mouseleave', 'lop-su-co', () => { map.getCanvas().style.cursor = ''; });
+
+    tt.ghimDi = taoGhim(kb.diem_di, MAU.tuyen);
+    tt.ghimDen = taoGhim(kb.diem_den, MAU.nguyHiem);
+
+    await docSuCo();
+    await tinhTuyen();
+    setInterval(docSuCo, 2000);
+  });
+}
+
+function taoGhim(toaDo, mau) {
+  const ghim = new maplibregl.Marker({ color: mau, draggable: true }).setLngLat(toaDo).addTo(tt.map);
+  ghim.on('dragend', () => datLai());
+  return ghim;
+}
+
+function moPopup(s) {
+  const o = document.createElement('div');
+  o.className = 'popup';
+  const b = document.createElement('b'); b.textContent = tenLop(s.loai);
+  const d = document.createElement('div');
+  d.className = 'nho';
+  d.textContent = `Tin cậy ${Math.round(s.tin_cay * 100)}% · xe trước báo lúc ${gio(s.luc)}`;
+  o.append(b, d);
+  if (s.anh_cat) { const img = document.createElement('img'); img.src = s.anh_cat; img.alt = tenLop(s.loai); o.append(img); }
+  tt.popup?.remove();
+  tt.popup = new maplibregl.Popup({ offset: 12 }).setLngLat(s.vi_tri).setDOMContent(o).addTo(tt.map);
+}
+
+async function goiTuyen(tu, den, vungNe = []) {
+  const r = await fetch('/api/tuyen-duong', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ diem_di: tu, diem_den: den, vung_ne: vungNe }),
+  });
+  const dl = await r.json();
+  if (!r.ok) throw new Error(dl.detail || `Lỗi ${r.status}`);
+  return taoTuyen(dl);
+}
+
+// Tuyến ban đầu, từ ghim xanh tới ghim đỏ
+async function tinhTuyen() {
+  bao('Đang tính tuyến đường…');
+  try {
+    tt.tuyen = await goiTuyen(toaDoGhim(tt.ghimDi), toaDoGhim(tt.ghimDen));
+    tt.viTri = 0;
+    veTuyen();
+    capNhatSuCo();
+    bao('Sẵn sàng — bấm ▶ Chạy để xe xuất phát');
+  } catch (e) {
+    bao('Không tính được tuyến: ' + e.message);
+  }
+}
+
+function veTuyen() {
+  tt.map.getSource('tuyen').setData(fc([duong(tt.tuyen.toa_do)]));
+  $('thong-tin-tuyen').textContent =
+    `Tuyến đang đi: ${km(tongTuyen(tt.tuyen))}, khoảng ${phut(tt.tuyen.thoi_gian_s)} (ở 30 km/h thực tế)` +
+    (tt.tuyen.la_tuyen_gia ? ' · ⚠ tuyến thẳng minh họa' : '');
+  veXe();
+}
+
+// ─────────── Đọc sự cố từ máy chủ (xe trước báo lên) ───────────
+async function docSuCo() {
+  try {
+    const r = await fetch(`/api/su-co?phien=${tt.phien}&tu=${tt.suCo.length}`);
+    const dl = await r.json();
+    let doi = false;
+    if (dl.phien !== tt.phien) {
+      // Xe trước bắt đầu video mới → danh sách cũ không còn giá trị
+      tt.phien = dl.phien;
+      tt.suCo = [];
+      tt.daXet.clear();
+      tt.daDoc.clear();
+      an_goiY();
+      doi = true;
+    }
+    if (dl.ds.length) { tt.suCo.push(...dl.ds); doi = true; }
+    if (doi && tt.tuyen) capNhatSuCo();
+  } catch {
+    bao('Mất kết nối với máy chủ — đang thử lại…');
+  }
+}
+
+// Tính lại vị trí sự cố so với tuyến hiện tại, rồi vẽ lại mọi thứ liên quan
+function capNhatSuCo() {
+  for (const s of tt.suCo) {
+    const v = viTriTrenTuyen(s.vi_tri, tt.tuyen);
+    s.tren_tuyen = v.d <= tt.kb.hanh_lang_m;
+    s.doc_tuyen = v.docTuyen;
+  }
+  tt.soDaQua = -1;                         // buộc vẽ lại chấm sự cố
+  veSuCo();
+  capNhatCanhBaoTruoc();
+  veBang();
+  henXetGoiY();
+}
+
+function veSuCo() {
+  const soDaQua = tt.suCo.filter((s) => s.tren_tuyen && s.doc_tuyen <= tt.viTri).length;
+  if (soDaQua === tt.soDaQua) return;      // chỉ vẽ lại khi xe vừa đi qua thêm sự cố
+  tt.soDaQua = soDaQua;
+  tt.map.getSource('su-co').setData(fc(tt.suCo.map((s) => diem(s.vi_tri, {
+    ma: s.ma, loai: s.loai, muc_do: s.muc_do,
+    mo: !s.tren_tuyen || s.doc_tuyen <= tt.viTri,
+  }))));
+  const truoc = phiaTruoc();
+  tt.map.getSource('tuyen-do').setData(fc(
+    doanNguyHiem(truoc).map(([tu, den]) => catTuyen(tt.tuyen, Math.max(tu, tt.viTri), den)).filter(Boolean).map(duong)));
+  $('so-su-co').textContent = `(${tt.suCo.length} sự cố · ${truoc.length} còn phía trước)`;
+}
+
+function veXe() {
+  const p = viTriXe();
+  tt.map.getSource('xe').setData(fc([diem(p)]));
+  const daDi = catTuyen(tt.tuyen, 0, tt.viTri);
+  tt.map.getSource('da-di').setData(fc([...tt.daDiToaDo, ...(daDi ? [daDi.concat([p])] : [])].map(duong)));
+
+  const tong = tongTuyen(tt.tuyen);
+  $('tien-do').style.width = `${(tt.viTri / tong) * 100}%`;
+  const daDiTong = tt.daDiTruoc + tt.viTri;
+  $('da-di').textContent = daDiTong > 0 ? `Đã đi ${km(daDiTong)}` : 'Chưa xuất phát';
+  $('con-lai').textContent = `Còn ${km(Math.max(0, tong - tt.viTri))}`;
+}
+
+// ─────────── Cảnh báo phía trước ───────────
+function capNhatCanhBaoTruoc() {
+  const o = $('canh-bao-truoc');
+  const R = tt.kb.canh_bao_truoc_m;
+  const truoc = phiaTruoc();
+  const gan = truoc.filter((s) => s.doc_tuyen - tt.viTri <= R);
+  o.className = '';
+  if (gan.length) {
+    const s = gan[0], cach = s.doc_tuyen - tt.viTri;
+    o.classList.add(gan.some((x) => x.muc_do >= tt.kb.muc_do_doi_tuyen) || cach < 100 ? 'do' : 'vang');
+    $('cb-lon').textContent = `⚠ ${tenLop(s.loai)} phía trước ${km(cach)}`;
+    $('cb-phu').textContent = `${gan.length} sự cố trong ${km(R)} tới do xe trước báo — giảm tốc độ, chú ý quan sát`;
+    docCanhBao(gan, cach);
+  } else if (truoc.length) {
+    $('cb-lon').textContent = `Thông thoáng trong ${km(R)} tới`;
+    $('cb-phu').textContent = `Sự cố gần nhất cách ${km(truoc[0].doc_tuyen - tt.viTri)} (${truoc.length} sự cố còn phía trước)`;
+  } else {
+    $('cb-lon').textContent = 'Đường phía trước thông thoáng';
+    $('cb-phu').textContent = tt.suCo.length
+      ? 'Không còn sự cố nào do xe trước báo trên phần tuyến phía trước'
+      : 'Chưa có sự cố nào do xe trước báo — mở trang nhận diện và chạy video để xe trước báo lên';
+  }
+}
+
+function noi(cau) {
+  if (!$('doc-canh-bao').checked || !('speechSynthesis' in window)) return;
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(cau);
+  u.lang = 'vi-VN';
+  speechSynthesis.speak(u);
+}
+
+// Chỉ đọc khi có sự cố MỚI lọt vào vùng báo trước, và cách lần đọc trước ít nhất 6 giây
+function docCanhBao(gan, cach) {
+  if (!tt.chay) return;
+  const moi = gan.filter((s) => !tt.daDoc.has(s.ma));
+  if (!moi.length || performance.now() - tt.lanDoc < 6000) return;
+  gan.forEach((s) => tt.daDoc.add(s.ma));
+  tt.lanDoc = performance.now();
+  noi(`Chú ý, ${tenLop(gan[0].loai)} phía trước ${Math.round(cach / 10) * 10} mét`);
+}
+
+// ─────────── Danh sách sự cố ───────────
+function veBang() {
+  const hang = tt.suCo.slice().sort((a, b) =>
+    (b.tren_tuyen - a.tren_tuyen) || (a.doc_tuyen - b.doc_tuyen)).map((s) => {
+    const tr = document.createElement('tr');
+    const o = () => tr.appendChild(document.createElement('td'));
+    const daQua = s.tren_tuyen && s.doc_tuyen <= tt.viTri;
+    if (daQua) tr.className = 'da-qua';
+
+    const oAnh = o();
+    if (s.anh_cat) { const img = document.createElement('img'); img.src = s.anh_cat; img.alt = tenLop(s.loai); oAnh.append(img); }
+
+    const chip = document.createElement('span');
+    chip.className = 'chip';
+    chip.style.background = mauLop(s.loai);
+    chip.textContent = tenLop(s.loai);
+    o().append(chip);
+
+    const oLuc = o();
+    oLuc.textContent = gio(s.luc);
+    oLuc.className = 'nho';
+
+    const nhan = document.createElement('span');
+    if (!s.tren_tuyen) { nhan.className = 'nhan ngoai'; nhan.textContent = 'Ngoài tuyến'; }
+    else if (daQua) { nhan.className = 'nhan qua'; nhan.textContent = 'Đã qua'; }
+    else { nhan.className = 'nhan truoc'; nhan.textContent = `Trước ${km(s.doc_tuyen - tt.viTri)}`; }
+    o().append(nhan);
+
+    tr.onclick = () => { tt.map.flyTo({ center: s.vi_tri, zoom: 17 }); moPopup(s); };
+    return tr;
+  });
+  $('bang-su-co').replaceChildren(...hang);
+}
+
+// ─────────── Gợi ý tuyến khác ───────────
+// Xét lại sau 2 giây: khi xe trước đang báo liên tục, gom nhiều sự cố vào một lần gọi ORS
+// (ORS miễn phí giới hạn 40 lượt/phút).
+function henXetGoiY() {
+  if (tt.henXet) return;
+  tt.henXet = setTimeout(() => { tt.henXet = null; xetGoiY(); }, 2000);
+}
+
+// Chọn tâm vùng né: các sự cố cách nhau đủ xa (vùng tròn không chồng lên nhau),
+// bỏ sự cố sát điểm xuất phát/đích (ORS không tìm được đường nếu điểm đầu/cuối nằm trong vùng cấm).
+function chonVungNe(ds, tu, den) {
+  const R = tt.kb.ban_kinh_ne_m, kq = [];
+  for (const s of ds) {
+    if (khoangCach(s.vi_tri, tu) < R + 15 || khoangCach(s.vi_tri, den) < R + 15) continue;
+    if (kq.some((p) => khoangCach(p, s.vi_tri) < R * 1.5)) continue;
+    kq.push(s.vi_tri);
+    if (kq.length >= 20) break;
+  }
+  return kq;
+}
+
+async function xetGoiY() {
+  if (tt.dangXet) { henXetGoiY(); return; }
+  const truoc = phiaTruoc();
+  const nen = truoc.some((s) => s.muc_do >= tt.kb.muc_do_doi_tuyen) || truoc.length >= tt.kb.so_su_co_goi_y_doi_tuyen;
+  if (!nen) { if (tt.goiY) an_goiY(); return; }
+  if (!truoc.some((s) => !tt.daXet.has(s.ma))) return;   // không có sự cố mới kể từ lần xét trước
+  truoc.forEach((s) => tt.daXet.add(s.ma));
+
+  if (tt.tuyen.la_tuyen_gia) {
+    hienThongTin(`Tuyến phía trước có ${truoc.length} sự cố do xe trước báo. ` +
+                 'Chưa có khóa ORS nên không tìm được tuyến khác — hãy giảm tốc độ.');
+    return;
+  }
+
+  const tu = viTriXe(), den = toaDoGhim(tt.ghimDen);
+  const vungNe = chonVungNe(truoc, tu, den);
+  if (!vungNe.length) return;
+
+  tt.dangXet = true;
+  bao('Phát hiện sự cố phía trước — đang tìm tuyến khác…');
+  try {
+    const moi = await goiTuyen(tu, den, vungNe);
+    // Đếm sự cố còn nằm trên tuyến mới để xem có thật sự tốt hơn không
+    const conLai = tt.suCo.filter((s) => s.muc_do >= 2 && viTriTrenTuyen(s.vi_tri, moi).d <= tt.kb.hanh_lang_m).length;
+    if (conLai >= truoc.length) {
+      hienThongTin(`Tuyến phía trước có ${truoc.length} sự cố do xe trước báo, nhưng không có tuyến khác ít sự cố hơn. Hãy giảm tốc độ.`);
+      bao('Không có tuyến khác tốt hơn');
+      return;
+    }
+    tt.goiY = { tuyen: moi, tranh: truoc.length - conLai, conLai,
+                them: tongTuyen(moi) - (tongTuyen(tt.tuyen) - tt.viTri) };
+    hienGoiY(truoc.length);
+  } catch (e) {
+    hienThongTin(`Tuyến phía trước có ${truoc.length} sự cố, nhưng không tìm được tuyến né: ${e.message}`);
+    bao('Không tìm được tuyến né');
+  } finally {
+    tt.dangXet = false;
+  }
+}
+
+function hienGoiY(soTruoc) {
+  const g = tt.goiY;
+  tt.map.getSource('tuyen-goi-y').setData(fc([duong(g.tuyen.toa_do)]));
+  const chenh = g.them >= 0 ? `dài thêm ${km(g.them)}` : `ngắn hơn ${km(-g.them)}`;
+  $('goi-y').className = 'the hien';
+  $('gy-tieu-de').textContent = '💡 Gợi ý tuyến khác';
+  $('gy-noi-dung').textContent =
+    `Tuyến hiện tại còn ${soTruoc} sự cố phía trước do xe trước báo. ` +
+    `Tuyến gợi ý (nét xanh) tránh được ${g.tranh} sự cố` +
+    (g.conLai ? `, còn ${g.conLai}` : '') + `, ${chenh}.`;
+  $('gy-nut').style.display = '';
+  // Đang chạy thì tạm dừng xe để người lái kịp chọn
+  if (tt.chay) { dungXe(); tt.chayLaiSauGoiY = true; }
+  bao('Có tuyến gợi ý — chọn đi tuyến mới hoặc giữ tuyến hiện tại');
+  noi(`Phía trước có ${soTruoc} sự cố. Có tuyến khác tránh được ${g.tranh} sự cố, ${chenh}.`);
+}
+
+function hienThongTin(noiDung) {
+  $('goi-y').className = 'the hien thong-tin';
+  $('gy-tieu-de').textContent = 'Gợi ý';
+  $('gy-noi-dung').textContent = noiDung;
+  $('gy-nut').style.display = 'none';
+}
+
+function an_goiY() {
+  tt.goiY = null;
+  $('goi-y').className = 'the';
+  tt.map?.getSource('tuyen-goi-y')?.setData(fc([]));
+}
+
+$('nut-di-goi-y').onclick = () => {
+  const g = tt.goiY;
+  if (!g) return;
+  // Giữ phần đã đi của tuyến cũ để vẽ vệt xám, rồi chuyển sang tuyến mới từ vị trí xe
+  const daDi = catTuyen(tt.tuyen, 0, tt.viTri);
+  if (daDi) tt.daDiToaDo.push(daDi.concat([viTriXe()]));
+  tt.daDiTruoc += tt.viTri;
+  tt.tuyen = g.tuyen;
+  tt.viTri = 0;
+  an_goiY();
+  veTuyen();
+  capNhatSuCo();
+  noi('Đã chuyển sang tuyến gợi ý');
+  bao('Đã chuyển sang tuyến gợi ý');
+  if (tt.chayLaiSauGoiY) chayXe();
+  tt.chayLaiSauGoiY = false;
+};
+
+$('nut-giu-tuyen').onclick = () => {
+  an_goiY();
+  bao('Giữ tuyến hiện tại — chỉ gợi ý lại khi xe trước báo thêm sự cố mới');
+  if (tt.chayLaiSauGoiY) chayXe();
+  tt.chayLaiSauGoiY = false;
+};
+
+// ─────────── Chạy / dừng xe ───────────
+async function chayXe() {
+  if (!tt.tuyen || tt.chay) return;
+  if (tt.viTri >= tongTuyen(tt.tuyen)) await datLai();   // đã đến nơi → đi lại từ ghim xanh
+  if (!tt.tuyen) return;
+  tt.chay = true;
+  tt.lanTruoc = performance.now();
+  tt.ghimDi.setDraggable(false);
+  tt.ghimDen.setDraggable(false);
+  $('nut-chay').disabled = true;
+  $('nut-dung').disabled = false;
+  bao('Xe đang chạy');
+  requestAnimationFrame(buocXe);
+}
+
+function dungXe() {
+  tt.chay = false;
+  $('nut-chay').disabled = false;
+  $('nut-dung').disabled = true;
+  $('nut-chay').textContent = '▶ Chạy tiếp';
+}
+
+function buocXe(bayGio) {
+  if (!tt.chay) return;
+  const dt = Math.min((bayGio - tt.lanTruoc) / 1000, 0.25);   // tab bị ẩn lâu thì không nhảy cóc
+  tt.lanTruoc = bayGio;
+  const tong = tongTuyen(tt.tuyen);
+  tt.viTri = Math.min(tong, tt.viTri + tocDo() * dt);
+
+  veXe();
+  veSuCo();
+  capNhatCanhBaoTruoc();
+  if (bayGio - tt.lanVeBang > 500) { tt.lanVeBang = bayGio; veBang(); }
+  if ($('bam-xe').checked && bayGio - tt.lanBam > 1000) {
+    tt.lanBam = bayGio;
+    tt.map.easeTo({ center: viTriXe(), duration: 900 });
+  }
+
+  if (tt.viTri >= tong) {
+    dungXe();
+    $('nut-chay').textContent = '▶ Chạy lại';
+    veBang();
+    bao('Đã đến nơi');
+    noi('Đã đến nơi');
+    return;
+  }
+  requestAnimationFrame(buocXe);
+}
+
+// Về điểm đi: dừng xe, xóa vệt đã đi, tính lại tuyến từ hai ghim
+function datLai() {
+  dungXe();
+  $('nut-chay').textContent = '▶ Chạy';
+  tt.ghimDi.setDraggable(true);
+  tt.ghimDen.setDraggable(true);
+  tt.daDiTruoc = 0;
+  tt.daDiToaDo = [];
+  tt.daXet.clear();
+  tt.daDoc.clear();
+  tt.chayLaiSauGoiY = false;
+  an_goiY();
+  return tinhTuyen();
+}
+
+$('nut-chay').onclick = () => chayXe();
+$('nut-dung').onclick = () => { dungXe(); bao('Xe đã dừng — bấm ▶ Chạy tiếp để đi tiếp'); };
+$('nut-dat-lai').onclick = () => datLai();
+
+khoiDong().catch((e) => bao('Không khởi động được: ' + e.message));
+</script>
+</body>
+</html>

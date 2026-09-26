@@ -1,12 +1,24 @@
 {
   "model": "best.pt",
+  "loai_model": "road_hazard",
+
+  "road_hazard": {
+    "duong_dan_code": "../../road_hazard",
+    "checkpoint": "../../road_hazard/runs/rdd_det_r18_aug960/best.pt",
+    "nguong_tin_cay": 0.35,
+    "buoc_khung": 25
+  },
+
   "nguong_tin_cay": 0.5,
   "buoc_khung": 5,
   "so_khung_xac_nhan": 2,
   "ban_kinh_gop_m": 25,
   "hanh_lang_m": 30,
+  "doan_canh_bao_m": 50,
   "ban_kinh_ne_m": 40,
   "muc_do_doi_tuyen": 3,
+  "canh_bao_truoc_m": 300,
+  "so_su_co_goi_y_doi_tuyen": 3,
   "rong_anh_gui": 720,
   "phat_theo_thoi_gian_thuc": true,
   "cho_phep_tuyen_gia": true,
@@ -28,5 +40,5 @@
   "diem_di":  [105.7893, 10.0349],
   "diem_den": [105.7690, 10.0298],
 
-  "supabase": { "bat": false, "url": "", "anon_key": "" }
+  "supabase": { "bat": true, "url": "", "anon_key": "" }
 }
