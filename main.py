@@ -153,16 +153,26 @@ def nap_model_road_hazard():
             print("[Model] road_hazard ⚠ chưa train segmentation -> KHÔNG lọc theo mặt đường")
         if "env" not in tasks:
             print("[Model] road_hazard ⚠ chưa train environment -> KHÔNG có nhãn thời tiết")
-        thieu = [l for l in KB["lop"] if l not in DET_CLASSES]
+        # Đầu ra của lớp chưa từng có nhãn khi train (vd flood khi chỉ train RDD2022) là số rác, có thể
+        # lên 0.9 → chỉ tin lớp có AP đo được trên tập val. Ghi đè bằng road_hazard.lop_da_train nếu cần.
+        ap = (ck.get("metrics") or {}).get("det_AP50") or {}
+        lop_da_train = rh.get("lop_da_train") or [c for c, v in ap.items() if v is not None]
+        print(f"[Model] road_hazard: lớp đã train (có AP trên tập val) = {lop_da_train}")
+        if not lop_da_train:
+            print("[Model] road_hazard ⚠ checkpoint không ghi lớp nào đã train — khai road_hazard.lop_da_train")
+        bo = [c for c in DET_CLASSES if c not in lop_da_train]
+        if bo:
+            print(f"[Model] road_hazard: bỏ đầu ra các lớp chưa train: {bo}")
+        thieu = [l for l in KB["lop"] if l not in lop_da_train]
         if thieu:
-            print(f"[Model] road_hazard ⚠ Lớp khai trong kich_ban.json nhưng model KHÔNG có: {thieu}")
+            print(f"[Model] road_hazard ⚠ Lớp khai trong kich_ban.json nhưng model CHƯA train: {thieu}")
 
         # Nhánh segmentation chưa train thì không tính, đỡ ~50 ms/khung trên CPU
         adapter = {"runner": StreamingRunner(net, with_seg="seg" in tasks), "device": device,
-                   "tasks": tasks, "img_size": cfg.img_size}
+                   "tasks": tasks, "img_size": cfg.img_size, "lop": set(lop_da_train)}
         tt = {"phien_ban": f"road_hazard ({duong_dan.parent.name}, {cfg.backbone}, {cfg.img_size}px)",
-              "checkpoint": str(duong_dan),
-              "tasks": list(tasks), "dataset": "RDD2022 (chỉ pothole, crack)"}
+              "checkpoint": str(duong_dan), "tasks": list(tasks),
+              "dataset": f"RDD2022 — lớp đã train: {', '.join(lop_da_train) or 'không rõ'}"}
         return adapter, tt
     except Exception as e:
         print(f"[Model] road_hazard ✗ Không nạp được '{duong_dan}': {e}")
@@ -283,13 +293,20 @@ def ma_hoa_jpeg(anh, rong_toi_da, chat_luong=70):
     """Ảnh OpenCV → chuỗi data URL JPEG để gửi qua WebSocket."""
     h, w = anh.shape[:2]
     if w > rong_toi_da:
-        anh = cv2.resize(anh, (rong_toi_da, int(h * rong_toi_da / w)))
+        # max(1, …): hộp rất dẹt (vd 250×1 px) làm chiều cao tính ra 0 → cv2.resize báo lỗi, ngắt cả video
+        anh = cv2.resize(anh, (rong_toi_da, max(1, int(h * rong_toi_da / w))))
     _, buf = cv2.imencode(".jpg", anh, [cv2.IMWRITE_JPEG_QUALITY, chat_luong])
     return "data:image/jpeg;base64," + base64.b64encode(buf).decode()
 
 
-def xu_ly_khung_yolo(khung, m):
+def hop_ti_le(x1, y1, x2, y2, w, h):
+    """Toạ độ hộp theo tỉ lệ 0..1 của khung — trình duyệt tự vẽ đè lên video ở mọi kích thước."""
+    return [round(min(max(v, 0.0), 1.0), 4) for v in (x1 / w, y1 / h, x2 / w, y2 / h)]
+
+
+def xu_ly_khung_yolo(khung, m, ve_anh=True):
     r = m.predict(khung, conf=KB["nguong_tin_cay"], imgsz=640, verbose=False)[0]
+    h, w = khung.shape[:2]
     phat_hien = []
     for box in r.boxes:
         loai = r.names[int(box.cls.item())]
@@ -300,12 +317,13 @@ def xu_ly_khung_yolo(khung, m):
         phat_hien.append({
             "loai": loai,
             "tin_cay": round(float(box.conf.item()), 3),
+            "hop": hop_ti_le(x1, y1, x2, y2, w, h),
             "anh_cat": ma_hoa_jpeg(cat, 200) if cat.size else None,
         })
-    return ma_hoa_jpeg(r.plot(), KB["rong_anh_gui"]), phat_hien
+    return (ma_hoa_jpeg(r.plot(), KB["rong_anh_gui"]) if ve_anh else None), phat_hien
 
 
-def xu_ly_khung_road_hazard(khung, m):
+def xu_ly_khung_road_hazard(khung, m, ve_anh=True):
     """Chạy model road_hazard (chỉ phần detection) trên một khung hình.
 
     Không dùng Decision Layer / tracker riêng của road_hazard ở đây — việc xác nhận qua
@@ -325,33 +343,38 @@ def xu_ly_khung_road_hazard(khung, m):
     # Điểm heatmap CenterNet thấp hơn điểm YOLO nên cần ngưỡng riêng (mặc định 0.35 như DecisionConfig)
     dets = decode_detections(out, KB.get("road_hazard", {}).get("nguong_tin_cay", 0.35))[0]
 
-    anh_ve = khung.copy()
+    anh_ve = khung.copy() if ve_anh else None
     phat_hien = []
     h, w = khung.shape[:2]
     for d in dets:
         loai = d["cls"]
-        if loai not in KB["lop"]:
+        if loai not in KB["lop"] or loai not in m["lop"]:
             continue
         x1, y1, x2, y2 = boxes_from_letterbox([d["bbox"]], params)[0].tolist()
         x1, y1 = max(int(x1), 0), max(int(y1), 0)
         x2, y2 = min(int(x2), w), min(int(y2), h)
-        cv2.rectangle(anh_ve, (x1, y1), (x2, y2), (0, 165, 255), 2)
-        cv2.putText(anh_ve, f"{loai} {d['score']:.2f}", (x1, max(y1 - 5, 0)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 1)
+        if ve_anh:
+            cv2.rectangle(anh_ve, (x1, y1), (x2, y2), (0, 165, 255), 2)
+            cv2.putText(anh_ve, f"{loai} {d['score']:.2f}", (x1, max(y1 - 5, 0)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 1)
         cat = khung[y1:y2, x1:x2]
         phat_hien.append({
             "loai": loai,
             "tin_cay": round(float(d["score"]), 3),
+            "hop": hop_ti_le(x1, y1, x2, y2, w, h),
             "anh_cat": ma_hoa_jpeg(cat, 200) if cat.size else None,
         })
-    return ma_hoa_jpeg(anh_ve, KB["rong_anh_gui"]), phat_hien
+    return (ma_hoa_jpeg(anh_ve, KB["rong_anh_gui"]) if ve_anh else None), phat_hien
 
 
-def xu_ly_khung(khung, loai, m):
-    """Chạy model trên một khung hình. Được gọi trong luồng phụ để không chặn máy chủ."""
+def xu_ly_khung(khung, loai, m, ve_anh=True):
+    """Chạy model trên một khung hình. Được gọi trong luồng phụ để không chặn máy chủ.
+
+    ve_anh=False: không vẽ hộp, không nén cả khung (video — trình duyệt tự vẽ đè lên video gốc).
+    """
     if loai == "road_hazard":
-        return xu_ly_khung_road_hazard(khung, m)
-    return xu_ly_khung_yolo(khung, m)
+        return xu_ly_khung_road_hazard(khung, m, ve_anh)
+    return xu_ly_khung_yolo(khung, m, ve_anh)
 
 
 # ─────────────── Kho sự cố dùng chung (trang "Xe đi sau" đọc lại) ───────────────
@@ -419,6 +442,14 @@ def them_su_co_anh(sc: SuCoAnh):
         raise HTTPException(400, f"Loại không hợp lệ: {sc.loai}")
     return luu_su_co({**sc.model_dump(), "muc_do": KB["lop"][sc.loai]["muc_do"],
                       "thoi_diem": None, "nguon": "anh"})
+
+
+@app.delete("/api/su-co")
+def xoa_su_co():
+    """Xóa toàn bộ kho sự cố dùng chung (để kiểm tra lại từ đầu). Không xóa dữ liệu đã gửi lên Supabase."""
+    so = len(KHO_SU_CO["ds"])
+    phien_moi()
+    return {"phien": KHO_SU_CO["phien"], "da_xoa": so}
 
 
 @app.get("/api/kich-ban")
@@ -539,15 +570,22 @@ async def nhan_dien(ws: WebSocket, video_id: str):
     da_bao = []                           # [(loai, vi_tri)] — chống báo trùng
     phien_moi()                           # chạy video mới → xe sau bắt đầu lại từ danh sách trống
     dem_lien_tiep = {loai: 0 for loai in KB["lop"]}
-    so_su_co = 0
+    so_su_co = so_bo_qua = 0
     bat_dau = time.perf_counter()
-    await ws.send_json({"loai_tin": "bat_dau", "so_khung": so_khung, "fps": fps})
+    await ws.send_json({"loai_tin": "bat_dau", "so_khung": so_khung, "fps": fps, "buoc": buoc})
 
     try:
         chi_so = -1
         while True:
             chi_so += 1
-            if chi_so % buoc:             # bỏ qua khung không cần xử lý (chỉ giải mã nhanh)
+            xu_ly = chi_so % buoc == 0
+            # Trình duyệt phát video gốc theo thời gian thực: máy chủ tụt lại quá một bước thì bỏ khung để bắt kịp,
+            # nếu không hộp vẽ ra sẽ trễ dần so với hình
+            if xu_ly and KB["phat_theo_thoi_gian_thuc"] \
+                    and (time.perf_counter() - bat_dau) - chi_so / fps > buoc / fps:
+                xu_ly = False
+                so_bo_qua += 1
+            if not xu_ly:                 # bỏ qua khung không cần xử lý (chỉ giải mã nhanh)
                 if not cap.grab():
                     break
                 continue
@@ -558,18 +596,19 @@ async def nhan_dien(ws: WebSocket, video_id: str):
             thoi_diem = chi_so / fps
             tien_do = chi_so / max(so_khung - 1, 1)
             vi_tri = vi_tri_theo_tien_do(HANH_TRINH, tien_do)
-            anh, phat_hien = await asyncio.to_thread(xu_ly_khung, khung, loai_model, m)
+            _, phat_hien = await asyncio.to_thread(xu_ly_khung, khung, loai_model, m, False)
 
             # Chỉ xác nhận sự cố khi thấy ở N khung xử lý liên tiếp → giảm báo nhầm
             thay = {p["loai"] for p in phat_hien}
             for loai in dem_lien_tiep:
                 dem_lien_tiep[loai] = dem_lien_tiep[loai] + 1 if loai in thay else 0
 
+            # Chỉ gửi toạ độ hộp (vài trăm byte), trình duyệt tự vẽ đè lên video gốc đang phát
             await ws.send_json({
-                "loai_tin": "khung", "anh": anh,
-                "tien_do": round(tien_do, 4), "thoi_diem": round(thoi_diem, 2),
+                "loai_tin": "khung",
+                "tien_do": round(tien_do, 4), "thoi_diem": round(thoi_diem, 3),
                 "vi_tri_xe": vi_tri,
-                "phat_hien": [{"loai": p["loai"], "tin_cay": p["tin_cay"]} for p in phat_hien],
+                "phat_hien": [{"loai": p["loai"], "tin_cay": p["tin_cay"], "hop": p["hop"]} for p in phat_hien],
             })
 
             for p in sorted(phat_hien, key=lambda p: -p["tin_cay"]):
@@ -596,7 +635,7 @@ async def nhan_dien(ws: WebSocket, video_id: str):
                 if cho > 0:
                     await asyncio.sleep(cho)
 
-        await ws.send_json({"loai_tin": "ket_thuc", "tong_su_co": so_su_co,
+        await ws.send_json({"loai_tin": "ket_thuc", "tong_su_co": so_su_co, "so_khung_bo_qua": so_bo_qua,
                             "thoi_gian_xu_ly": round(time.perf_counter() - bat_dau, 1)})
     except WebSocketDisconnect:
         pass

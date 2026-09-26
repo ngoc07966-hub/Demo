@@ -74,6 +74,10 @@
                border-radius:10px; padding:10px 12px; box-shadow:0 2px 8px rgba(0,0,0,.15); font-size:13px; }
   .chu-thich { display:flex; gap:12px; flex-wrap:wrap; margin-top:6px; }
   .chu-thich i { display:inline-block; width:14px; height:4px; border-radius:2px; vertical-align:middle; margin-right:4px; }
+  .ky-hieu { display:inline-flex; align-items:center; gap:4px; }
+  .ky-hieu .cham { width:13px; height:13px; border-radius:50%; border:2px solid #fff;
+                   box-shadow:0 0 0 1px rgba(0,0,0,.3); }
+  .ky-hieu .cham.to { width:17px; height:17px; }
   .popup img { width:180px; border-radius:6px; display:block; margin-top:6px; }
 
   @media (max-width:900px) {
@@ -101,6 +105,7 @@
         <button class="chinh" id="nut-chay">▶ Chạy</button>
         <button id="nut-dung" disabled>⏸ Dừng</button>
         <button id="nut-dat-lai">⟲ Về điểm đi</button>
+        <button id="nut-xoa-su-co" title="Xóa mọi sự cố đã ghi nhận ở cả hai trang để kiểm tra lại từ đầu">🗑 Xóa toàn bộ sự cố</button>
         <label class="nho">Tốc độ
           <select id="toc-do">
             <option value="1">×1 (30 km/h)</option>
@@ -159,10 +164,12 @@
         <span><i style="background:var(--xanh)"></i>Tuyến gợi ý</span>
         <span><i style="background:#9ca3af"></i>Đã đi</span>
       </div>
+      <div class="chu-thich nho" id="ky-hieu"></div>
     </div>
   </section>
 </main>
 
+<script src="/static/ky_hieu.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
 const MAU = { tuyen: '#2563eb', nguyHiem: '#dc2626', goiY: '#16a34a', daDi: '#9ca3af' };
@@ -273,6 +280,14 @@ const phiaTruoc = () => tt.suCo
 async function khoiDong() {
   tt.kb = await (await fetch('/api/kich-ban')).json();
   const kb = tt.kb;
+  veKyHieu($('ky-hieu'), [
+    // Chấm to/nhỏ theo mức độ, giống 'circle-radius' của lớp lop-su-co
+    ...Object.values(kb.lop).map((v) => ({ kieu: 'cham', mau: v.mau, ten: v.ten, to: v.muc_do >= 3 })),
+    { kieu: 'cham', mau: Object.values(kb.lop)[0]?.mau ?? '#888888', mo: true, ten: 'Chấm mờ: đã qua hoặc ngoài tuyến' },
+    { kieu: 'cham', mau: MAU.tuyen, to: true, ten: 'Xe của bạn' },
+    { kieu: 'ghim', mau: MAU.tuyen, ten: 'Điểm đi' },
+    { kieu: 'ghim', mau: MAU.nguyHiem, ten: 'Điểm đến' },
+  ]);
   if (!kb.co_khoa_ors) {
     const o = $('nhac-viec');
     o.innerHTML = '⚠ Chưa có <b>ORS_API_KEY</b> trong file .env — tuyến chỉ là đường thẳng minh họa, không gợi ý được tuyến né.';
@@ -701,6 +716,21 @@ function datLai() {
 $('nut-chay').onclick = () => chayXe();
 $('nut-dung').onclick = () => { dungXe(); bao('Xe đã dừng — bấm ▶ Chạy tiếp để đi tiếp'); };
 $('nut-dat-lai').onclick = () => datLai();
+
+// Xóa kho sự cố trên máy chủ (trang nhận diện dùng chung kho này), rồi đưa xe về điểm đi
+$('nut-xoa-su-co').onclick = async () => {
+  if (!confirm('Xóa toàn bộ sự cố đã ghi nhận (cả trang nhận diện)?')) return;
+  try {
+    const r = await fetch('/api/su-co', { method: 'DELETE' });
+    const dl = await r.json();
+    if (!r.ok) throw new Error(dl.detail || `Lỗi ${r.status}`);
+    await docSuCo();                       // phiên đổi → danh sách trên trang này về trống
+    await datLai();
+    bao(`Đã xóa ${dl.da_xoa} sự cố`);
+  } catch (err) {
+    bao('Không xóa được sự cố: ' + err.message);
+  }
+};
 
 khoiDong().catch((e) => bao('Không khởi động được: ' + e.message));
 </script>

@@ -4,9 +4,9 @@
 
   "road_hazard": {
     "duong_dan_code": "../../road_hazard",
-    "checkpoint": "../../road_hazard/runs/rdd_det_r18_aug960/best.pt",
+    "checkpoint": "../../road_hazard/runs/rdd_det_mbv3_fpn64_640/best.pt",
     "nguong_tin_cay": 0.35,
-    "buoc_khung": 25
+    "buoc_khung": 7
   },
 
   "nguong_tin_cay": 0.5,

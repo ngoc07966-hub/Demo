@@ -117,7 +117,7 @@ Mọi tham số nằm trong `kich_ban.json`, sửa xong khởi động lại má
 | `model` | Đường dẫn model — `best.pt` hoặc `models/v1-20260925/best.pt` | `best.pt` |
 | `loai_model` | Model lúc khởi động: `yolo` hoặc `road_hazard` (đổi được trên giao diện, ô "Model:") | `yolo` |
 | `road_hazard.checkpoint` | Checkpoint của model road_hazard (thử nghiệm) | `../../road_hazard/runs/rdd_det_r18_aug960/best.pt` |
-| `road_hazard.nguong_tin_cay` / `.buoc_khung` | Ngưỡng và bước khung riêng cho road_hazard (chậm hơn YOLO, điểm tin cậy thấp hơn) | `0.35` / `25` |
+| `road_hazard.nguong_tin_cay` / `.buoc_khung` | Ngưỡng và bước khung riêng cho road_hazard (chậm hơn YOLO, điểm tin cậy thấp hơn) | `0.35` / `7` |
 | `nguong_tin_cay` | Bỏ phát hiện tin cậy thấp hơn | `0.5` |
 | `buoc_khung` | Cứ bao nhiêu khung chạy YOLO một lần | `5` |
 | `so_khung_xac_nhan` | Số khung xử lý liên tiếp mới xác nhận sự cố | `2` |
@@ -126,8 +126,8 @@ Mọi tham số nằm trong `kich_ban.json`, sửa xong khởi động lại má
 | `doan_canh_bao_m` | Tô đỏ đoạn tuyến dài chừng này (m) trước và sau mỗi sự cố; phần còn lại giữ màu thường | `50` |
 | `ban_kinh_ne_m` | Bán kính vùng né quanh sự cố | `40` |
 | `muc_do_doi_tuyen` | Mức độ tối thiểu để hiện nút tìm tuyến né | `3` |
-| `rong_anh_gui` | Chiều rộng ảnh gửi về trình duyệt (px) | `720` |
-| `phat_theo_thoi_gian_thuc` | Không xử lý nhanh hơn tốc độ video thật | `true` |
+| `rong_anh_gui` | Chiều rộng ảnh đã vẽ khung gửi về khi **nhận diện ảnh chụp** (video không gửi ảnh nữa) | `720` |
+| `phat_theo_thoi_gian_thuc` | Không xử lý nhanh hơn video thật; máy chủ chậm hơn thì tự bỏ khung để hộp khớp video trình duyệt đang phát. **Giữ `true`** | `true` |
 | `cho_phep_tuyen_gia` | Chưa có khóa ORS thì vẽ tuyến đường thẳng để thử giao diện | `true` |
 | `lop` | Lớp dùng: khóa phải **trùng tên lớp của model** | `pothole`, `flood` |
 | `xe_camera.tu` / `.den` | Hành trình xe có camera hành trình | Chợ Cần Thơ → ĐH Cần Thơ khu II |
@@ -206,7 +206,7 @@ WebDemo/
 | `POST` | `/api/video` | `{ video_id, ten, so_khung, fps, thoi_luong }` |
 | `POST` | `/api/anh` | `{ ten, anh, phat_hien: [{ loai, tin_cay, anh_cat }] }` |
 | `POST` | `/api/tuyen-duong` | `{ toa_do, quang_duong_m, thoi_gian_s, la_tuyen_gia }` |
-| `WS` | `/ws/nhan-dien/{video_id}` | Tin `bat_dau` · `khung` · `su_co` · `ket_thuc` · `loi` |
+| `WS` | `/ws/nhan-dien/{video_id}` | Tin `bat_dau` (`fps`, `buoc`) · `khung` (`thoi_diem`, `phat_hien: [{ loai, tin_cay, hop: [x1,y1,x2,y2] tỉ lệ 0–1 }]`, không kèm ảnh) · `su_co` · `ket_thuc` (`so_khung_bo_qua`) · `loi` |
 | `GET` | `/api/su-co?phien=&tu=` | Kho sự cố dùng chung `{ phien, tu, ds }` — trang Xe đi sau đọc mỗi 2 giây |
 | `POST` | `/api/su-co` | Ghi sự cố từ ảnh chụp vào kho chung |
 | `GET` | `/xe-sau` | Trang **Xe đi sau**: cùng tuyến, thấy sự cố xe trước để lại, nút Chạy/Dừng, báo trước `canh_bao_truoc_m`, gợi ý tuyến khác khi phía trước có ≥ `so_su_co_goi_y_doi_tuyen` sự cố |
@@ -227,7 +227,8 @@ Chi tiết từng trường: mục 8 của `demo-web-nhan-dien.md`.
 | Bảng có sự cố nhưng tuyến không bao giờ đỏ khúc nào | `diem_di`/`diem_den` lệch hành trình xe camera — xem mục 4 |
 | Sự cố hiện ngoài biển, sai châu lục | Nhập nhầm `[vĩ độ, kinh độ]` — đảo lại |
 | Một ổ gà tạo nhiều dòng | Tăng `ban_kinh_gop_m` lên 40–50 |
-| Video chạy giật | Tăng `buoc_khung` lên 8–10, giảm `rong_anh_gui` còn 560 |
+| Video mượt nhưng hộp nhảy thưa / thông báo "bỏ qua … khung" | Máy chủ không kịp — tăng `buoc_khung` (của model đang dùng) |
+| Video giật | Trình duyệt tự phát video gốc; giật là do máy xem yếu hoặc video quá nặng — thử video 1080p thay vì 4K |
 | Tìm tuyến né lỗi 502 | Vùng né che mất điểm đi/đến — chọn video có vùng ngập ở giữa, hoặc kéo ghim đi chỗ khác |
 | Không đọc được `.mov` từ iPhone | Chuyển sang `.mp4` (H.264) trước khi tải lên |
 | Ảnh chụp nhận diện được nhưng không hiện trên bản đồ | Kéo **ghim tím** vào gần tuyến — sự cố từ ảnh đặt đúng chỗ ghim đó |

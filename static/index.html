@@ -42,9 +42,11 @@
            border:1px solid var(--vien); background:#fff; cursor:pointer; }
   button.chinh { background:var(--lam); color:#fff; border-color:var(--lam); }
   button:disabled { opacity:.45; cursor:not-allowed; }
-  .man-hinh { margin-top:10px; background:#000; border-radius:8px; aspect-ratio:16/9;
+  .man-hinh { margin-top:10px; background:#000; border-radius:8px; aspect-ratio:16/9; position:relative;
               display:flex; align-items:center; justify-content:center; overflow:hidden; }
   .man-hinh video, .man-hinh img { width:100%; height:100%; object-fit:contain; }
+  /* Lớp vẽ hộp: cùng kích thước gốc với video + cùng object-fit → hộp khớp đúng chỗ ở mọi cỡ màn hình */
+  .man-hinh canvas { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; pointer-events:none; }
   .goi-y { color:#9ca3af; font-size:13px; }
   .thanh { height:6px; background:var(--vien); border-radius:3px; margin-top:8px; overflow:hidden; }
   .thanh > div { height:100%; width:0; background:var(--lam); transition:width .2s; }
@@ -74,6 +76,10 @@
   .chu-thich { display:flex; gap:12px; flex-wrap:wrap; margin-top:6px; }
   .chu-thich i { display:inline-block; width:14px; height:4px; border-radius:2px;
                  vertical-align:middle; margin-right:4px; }
+  .ky-hieu { display:inline-flex; align-items:center; gap:4px; }
+  .ky-hieu .cham { width:13px; height:13px; border-radius:50%; border:2px solid #fff;
+                   box-shadow:0 0 0 1px rgba(0,0,0,.3); }
+  .ky-hieu .cham.to { width:17px; height:17px; }
   #canh-bao { bottom:40px; border-radius:10px; padding:12px 14px; color:#fff;
               box-shadow:0 2px 8px rgba(0,0,0,.2); display:none; font-size:14px; }
   #canh-bao.do { display:block; background:var(--do); }
@@ -105,6 +111,7 @@
       <input type="file" id="chon-video" accept="video/*">
       <button class="chinh" id="nut-bat-dau" disabled>Bắt đầu nhận diện</button>
       <button id="nut-dung" disabled>Dừng</button>
+      <button id="nut-xoa-su-co" title="Xóa mọi sự cố đã ghi nhận ở cả hai trang để kiểm tra lại từ đầu">🗑 Xóa toàn bộ sự cố</button>
     </div>
     <div class="hang" style="margin-top:8px">
       <span class="nho">Hoặc nhận diện ảnh chụp:</span>
@@ -143,14 +150,15 @@
         <span><i style="background:var(--do)"></i>Đoạn có sự cố</span>
         <span><i style="background:var(--xanh)"></i>Tuyến né</span>
         <span><i style="background:#6b7280"></i>Hành trình xe camera</span>
-        <span><i style="background:#7c3aed"></i>Vị trí ảnh chụp</span>
         <label><input type="checkbox" id="doc-canh-bao" checked> Đọc cảnh báo</label>
       </div>
+      <div class="chu-thich nho" id="ky-hieu"></div>
     </div>
     <div class="noi" id="canh-bao"></div>
   </section>
 </main>
 
+<script src="/static/ky_hieu.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
 const MAU = { binhThuong: '#2563eb', nguyHiem: '#dc2626', anToan: '#16a34a', ghimAnh: '#7c3aed' };
@@ -162,6 +170,9 @@ const tt = {
   daDoiTuyen: false, chenhLech: '',
   suCo: [], daDoc: new Set(), demAnh: 0,
   videoId: null, ws: null,
+  videoUrl: null,       // URL cục bộ của video đã chọn — trình duyệt tự phát, không cần tải hình từ máy chủ
+  hop: [],              // kết quả các khung gần đây: [{ t: giây trong video, ds: phát hiện }], tăng dần theo t
+  hieuLuc: 0.6,         // quá bao nhiêu giây thì coi hộp đã cũ, không vẽ nữa
 };
 
 // ─────────── Hình học (tọa độ luôn là [kinh độ, vĩ độ]) ───────────
@@ -240,6 +251,15 @@ async function khoiDong() {
   nhacViec();
   taoChonModel();
   hienBanModel();
+  veKyHieu($('ky-hieu'), [
+    // Chấm to/nhỏ theo mức độ, giống 'circle-radius' của lớp lop-su-co
+    ...Object.values(kb.lop).map((v) => ({ kieu: 'cham', mau: v.mau, ten: v.ten, to: v.muc_do >= 3 })),
+    { kieu: 'cham', mau: Object.values(kb.lop)[0]?.mau ?? '#888888', mo: true, ten: 'Chấm mờ: sự cố ngoài tuyến' },
+    { kieu: 'cham', mau: '#111827', ten: 'Xe camera' },
+    { kieu: 'ghim', mau: MAU.binhThuong, ten: 'Điểm đi' },
+    { kieu: 'ghim', mau: MAU.nguyHiem, ten: 'Điểm đến' },
+    { kieu: 'ghim', mau: MAU.ghimAnh, ten: 'Vị trí ảnh chụp' },
+  ]);
 
   const map = tt.map = new maplibregl.Map({
     container: 'ban-do',
@@ -566,8 +586,10 @@ $('chon-video').addEventListener('change', async (e) => {
   if (!tep) return;
   dungNhanDien();
   tt.videoId = null;
+  if (tt.videoUrl) URL.revokeObjectURL(tt.videoUrl);
+  tt.videoUrl = URL.createObjectURL(tep);
   const video = document.createElement('video');
-  video.src = URL.createObjectURL(tep);
+  video.src = tt.videoUrl;
   video.controls = true;
   video.muted = true;
   $('man-hinh').replaceChildren(video);
@@ -652,6 +674,27 @@ $('chon-anh').addEventListener('change', async (e) => {
 $('nut-bat-dau').onclick = () => batDauNhanDien();
 $('nut-dung').onclick = () => { dungNhanDien(); bao('Đã dừng'); };
 
+// Xóa kho sự cố trên máy chủ (trang Xe đi sau cũng trống theo) và trên trang này,
+// dừng video đang nhận diện, đưa tuyến về như ban đầu
+$('nut-xoa-su-co').onclick = async () => {
+  if (!confirm('Xóa toàn bộ sự cố đã ghi nhận (cả trang Xe đi sau)?')) return;
+  try {
+    const r = await fetch('/api/su-co', { method: 'DELETE' });
+    const dl = await r.json();
+    if (!r.ok) throw new Error(dl.detail || `Lỗi ${r.status}`);
+    dungNhanDien();
+    tt.suCo = [];
+    tt.daDoc.clear();
+    tt.demAnh = 0;
+    tt.map.getSource('xe-camera')?.setData(fc([]));
+    capNhatThongKe();
+    await tinhTuyen();
+    bao(`Đã xóa ${dl.da_xoa} sự cố`);
+  } catch (err) {
+    bao('Không xóa được sự cố: ' + err.message);
+  }
+};
+
 function batDauNhanDien() {
   if (!tt.videoId) return;
   dungNhanDien();
@@ -661,23 +704,35 @@ function batDauNhanDien() {
   capNhatThongKe();
   capNhatCanhBao();
 
-  const img = document.createElement('img');
-  img.alt = 'Khung hình đã nhận diện';
-  $('man-hinh').replaceChildren(img);
+  // Trình duyệt tự phát video gốc (mượt đúng tốc độ khung của video); máy chủ chỉ gửi toạ độ hộp
+  const video = document.createElement('video');
+  video.src = tt.videoUrl;
+  video.muted = true;
+  video.playsInline = true;
+  const canvas = document.createElement('canvas');
+  $('man-hinh').replaceChildren(video, canvas);
+  tt.hop = [];
   $('nut-bat-dau').disabled = true;
   $('nut-dung').disabled = false;
 
   const giaoThuc = location.protocol === 'https:' ? 'wss' : 'ws';
   const ws = tt.ws = new WebSocket(`${giaoThuc}://${location.host}/ws/nhan-dien/${tt.videoId}`);
+  let daXong = false;                        // đã nhận 'ket_thuc' hoặc 'loi' → đóng kết nối là bình thường
 
   ws.onmessage = (e) => {
     const m = JSON.parse(e.data);
     switch (m.loai_tin) {
       case 'bat_dau':
         bao('Đang nhận diện…');
+        // Hộp của một khung còn hiệu lực khoảng 2,5 bước xử lý, sau đó coi là cũ
+        tt.hieuLuc = 2.5 * m.buoc / m.fps;
+        video.currentTime = 0;
+        video.play().catch(() => {});
+        chayVeHop(video, canvas);
         break;
       case 'khung':
-        img.src = m.anh;
+        tt.hop.push({ t: m.thoi_diem, ds: m.phat_hien });
+        if (tt.hop.length > 30) tt.hop.shift();
         $('tien-do').style.width = `${m.tien_do * 100}%`;
         $('thoi-gian').textContent = mmss(m.thoi_diem);
         $('dang-thay').textContent = m.phat_hien.length
@@ -691,14 +746,18 @@ function batDauNhanDien() {
         capNhatCanhBao();
         break;
       case 'ket_thuc':
-        bao(`Hoàn tất: ${m.tong_su_co} sự cố, xử lý trong ${m.thoi_gian_xu_ly} giây`);
+        daXong = true;
+        bao(`Hoàn tất: ${m.tong_su_co} sự cố, xử lý trong ${m.thoi_gian_xu_ly} giây`
+          + (m.so_khung_bo_qua ? ` · bỏ qua ${m.so_khung_bo_qua} khung để theo kịp video` : ''));
         break;
       case 'loi':
+        daXong = true;
         bao('Lỗi: ' + m.noi_dung);
         break;
     }
   };
-  ws.onclose = () => {
+  ws.onclose = (e) => {
+    if (!daXong) bao(`Nhận diện bị ngắt giữa chừng (mã ${e.code}) — xem cửa sổ máy chủ để biết lỗi`);
     tt.ws = null;
     $('nut-dung').disabled = true;
     $('nut-bat-dau').disabled = !tt.videoId;
@@ -706,7 +765,56 @@ function batDauNhanDien() {
   ws.onerror = () => bao('Mất kết nối với máy chủ');
 }
 
+// Vẽ lại hộp mỗi lần trình duyệt vẽ màn hình, theo đúng thời điểm video đang phát.
+// Dừng khi canvas bị gỡ khỏi trang (chọn video/ảnh khác hoặc chạy lại).
+function chayVeHop(video, canvas) {
+  const lap = () => {
+    if (!canvas.isConnected) return;
+    veHop(video, canvas);
+    requestAnimationFrame(lap);
+  };
+  requestAnimationFrame(lap);
+}
+
+function veHop(video, canvas) {
+  const W = video.videoWidth, H = video.videoHeight;
+  if (!W) return;
+  if (canvas.width !== W || canvas.height !== H) { canvas.width = W; canvas.height = H; }
+  const g = canvas.getContext('2d');
+  g.clearRect(0, 0, W, H);
+
+  // Kết quả mới nhất của khung không muộn hơn hình đang hiện; quá cũ thì không vẽ
+  const bayGio = video.currentTime;
+  let chon = null;
+  for (const h of tt.hop) {
+    if (h.t > bayGio + 0.03) break;
+    chon = h;
+  }
+  if (!chon || bayGio - chon.t > tt.hieuLuc) return;
+
+  // Canvas bị co giãn theo khung hiển thị → tính nét và cỡ chữ theo pixel màn hình để luôn đọc được
+  const k = Math.min(canvas.clientWidth / W, canvas.clientHeight / H) || 1;
+  const net = 2 / k, co = Math.round(12 / k);
+  g.lineWidth = net;
+  g.font = `600 ${co}px system-ui, sans-serif`;
+  g.textBaseline = 'bottom';
+  for (const p of chon.ds) {
+    const x1 = p.hop[0] * W, y1 = p.hop[1] * H, x2 = p.hop[2] * W, y2 = p.hop[3] * H;
+    const mau = mauLop(p.loai);
+    g.strokeStyle = mau;
+    g.strokeRect(x1, y1, x2 - x1, y2 - y1);
+    const nhan = `${tenLop(p.loai)} ${Math.round(p.tin_cay * 100)}%`;
+    const rong = g.measureText(nhan).width + 8;
+    const day = y1 - co - 4 >= 0 ? y1 : y1 + co + 4;   // sát mép trên thì đưa nhãn vào trong hộp
+    g.fillStyle = mau;
+    g.fillRect(x1 - net / 2, day - co - 4, rong, co + 4);
+    g.fillStyle = '#fff';
+    g.fillText(nhan, x1 + 4 - net / 2, day - 2);
+  }
+}
+
 function dungNhanDien() {
+  $('man-hinh').querySelector('video')?.pause();
   if (tt.ws) { tt.ws.onclose = null; tt.ws.close(); tt.ws = null; }
   $('nut-dung').disabled = true;
   $('nut-bat-dau').disabled = !tt.videoId;
