@@ -120,10 +120,15 @@ Máy chủ cũng tự kiểm tra việc này lúc khởi động và in cảnh b
 
 ## Về Git
 
-`.gitignore` đã chặn `*.pt` — file model nặng, không commit. Nhưng `model.json` **có** được
-commit, nên lịch sử các lần train vẫn nằm trong repo dù file model thì không.
+`.gitignore` chặn mọi file `*.pt` **trừ `best.pt`** (cả ở thư mục gốc lẫn trong
+`models/<phiên bản>/`). Model YOLO11n tự train chỉ ~5 MB, dưới xa giới hạn 100 MB/file của
+GitHub, nên commit thẳng lên để clone về là chạy được ngay. `model.json` cũng được commit,
+nên lịch sử các lần train nằm đủ trong repo.
 
-Chia file `best.pt` cho nhau qua Google Drive, đặt link trong `ghi_chu` của `model.json`.
+`yolo11n.pt` (model mẫu của Ultralytics) vẫn bị bỏ qua — nó tự tải khi chạy chế độ thử.
+
+Nếu sau này model vượt ~50 MB (GitHub bắt đầu cảnh báo), chuyển sang đính kèm vào
+GitHub Releases hoặc Google Drive và ghi link trong `ghi_chu` của `model.json`.
 
 ---
 

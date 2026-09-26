@@ -10,8 +10,11 @@ __pycache__/
 uploads/*
 !uploads/.gitkeep
 
-# Model — file nặng, tải riêng từ Google Drive / Colab
+# Model — bỏ qua mọi file .pt, TRỪ best.pt (model tự train, ~5 MB, đưa lên GitHub
+# để clone về là chạy được ngay). yolo11n.pt không cần — Ultralytics tự tải.
 *.pt
+!best.pt
+!models/**/best.pt
 
 # Kết quả chạy thử của Ultralytics
 runs/
